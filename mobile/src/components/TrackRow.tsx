@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import {
   View, Text, TouchableOpacity, StyleSheet, Modal,
-  Share, Alert, Pressable, ToastAndroid, Platform
+  Share, Alert, Pressable, ToastAndroid, Platform, Image
 } from "react-native";
 import * as MediaLibrary from "expo-media-library";
 import { Ionicons } from "@expo/vector-icons";
@@ -9,6 +9,7 @@ import { colors, spacing } from "../theme/colors";
 import { Track, usePlayer } from "../context/PlayerContext";
 import PressableScale from "./PressableScale";
 import * as Haptics from "expo-haptics";
+import { useNavigation } from "@react-navigation/native";
 
 interface Props {
   track: Track;
@@ -20,9 +21,12 @@ interface Props {
 export default function TrackRow({ track, onPress, onDeleted, onRemoveFromPlaylist }: Props) {
   const [menuVisible, setMenuVisible] = useState(false);
   const [showPlaylists, setShowPlaylists] = useState(false);
+  const navigation = useNavigation<any>();
   const { isLiked, toggleLike, playlists, addTrackToPlaylist, downloads, downloadTrack } = usePlayer();
   const liked = isLiked(track.id);
   const isDownloaded = downloads.some(d => d.id === track.id);
+
+  const [isPressed, setIsPressed] = useState(false);
 
   const handleShare = async () => {
     setMenuVisible(false);
@@ -57,6 +61,7 @@ export default function TrackRow({ track, onPress, onDeleted, onRemoveFromPlayli
   };
 
   const handleToggleLike = () => {
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => undefined);
     toggleLike(track);
     setMenuVisible(false);
   };
@@ -87,19 +92,22 @@ export default function TrackRow({ track, onPress, onDeleted, onRemoveFromPlayli
 
   return (
     <>
-      <PressableScale style={styles.row} onPress={onPress} onLongPress={() => {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-        setMenuVisible(true);
-      }}>
-        <View style={styles.rowAccent} />
+      <PressableScale 
+        style={[styles.row, isPressed && { backgroundColor: "rgba(255,255,255,0.05)" }]} 
+        onPress={onPress} 
+        onPressIn={() => setIsPressed(true)}
+        onPressOut={() => setIsPressed(false)}
+        onLongPress={() => {
+          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+          setMenuVisible(true);
+        }}>
         <View style={styles.iconSquare}>
-          {track.source === "youtube" ? (
+          {track.thumbnail ? (
+            <Image source={{ uri: track.thumbnail }} style={styles.trackArt} />
+          ) : track.source === "youtube" ? (
             <Ionicons name="logo-youtube" size={22} color={colors.danger} />
           ) : (
-            <>
-              <View style={styles.vinylDot} />
-              <Ionicons name="musical-note" size={22} color={colors.primary} />
-            </>
+            <Ionicons name="musical-note" size={22} color={colors.primary} />
           )}
         </View>
         <View style={styles.info}>
@@ -169,6 +177,16 @@ export default function TrackRow({ track, onPress, onDeleted, onRemoveFromPlayli
                   onPress={handleToggleLike}
                 />
                 <MenuRow icon="list-outline" label="Add to Playlist" onPress={() => setShowPlaylists(true)} />
+                {track.artist_name && (
+                  <MenuRow
+                    icon="person-outline"
+                    label="Go to Artist"
+                    onPress={() => {
+                      closeMenu();
+                      navigation.navigate("Artist", { artistName: track.artist_name });
+                    }}
+                  />
+                )}
                 {track.source === "youtube" && !isDownloaded && (
                   <MenuRow icon="cloud-download-outline" label="Download for Offline" onPress={handleDownload} />
                 )}
@@ -210,44 +228,23 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: "row",
     alignItems: "center",
-    marginHorizontal: spacing.md,
-    marginVertical: 4,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderRadius: 16,
-    backgroundColor: "rgba(13,16,32,0.72)",
-    borderWidth: 1,
-    borderColor: colors.borderSoft,
-    overflow: "hidden",
-  },
-  rowAccent: {
-    position: "absolute",
-    left: 0,
-    top: 12,
-    bottom: 12,
-    width: 3,
-    borderRadius: 3,
-    backgroundColor: colors.primary,
+    paddingVertical: 10,
+    paddingHorizontal: spacing.md,
+    backgroundColor: "transparent",
   },
   iconSquare: {
-    width: 54, height: 54, backgroundColor: colors.surfaceElevated,
-    alignItems: "center", justifyContent: "center", marginRight: spacing.md,
-    borderRadius: 15,
-    borderWidth: 1,
-    borderColor: colors.border,
+    width: 48, height: 48, backgroundColor: colors.surfaceElevated,
+    alignItems: "center", justifyContent: "center", marginRight: 12,
+    borderRadius: 4,
     overflow: "hidden",
   },
-  vinylDot: {
-    position: "absolute",
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: colors.glowPrimary,
+  trackArt: {
+    width: 48, height: 48, resizeMode: "cover",
   },
   info: { flex: 1, justifyContent: "center" },
-  title: { color: colors.text, fontSize: 15, fontWeight: "700", marginBottom: 3 },
+  title: { color: colors.text, fontSize: 16, marginBottom: 2 },
   subtitle: { color: colors.textSecondary, fontSize: 13 },
-  moreButton: { padding: spacing.sm },
+  moreButton: { padding: spacing.sm, marginLeft: 8 },
 
   // Modal
   backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.72)", justifyContent: "flex-end" },

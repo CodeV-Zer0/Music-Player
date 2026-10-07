@@ -2,6 +2,7 @@ import React, { createContext, useContext, useRef, useState, useCallback, useEff
 import { Audio, AVPlaybackStatus } from "expo-av";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as FileSystem from "expo-file-system/legacy";
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { LocalTrack } from "../services/localLibrary";
 import { resolveStreamUrl } from "../services/pipedApi";
 
@@ -27,6 +28,12 @@ export type DownloadedTrack = Track & {
 };
 
 const DOWNLOADS_KEY = "raga_downloads";
+
+export type RepeatMode = "off" | "all" | "one";
+
+// Settings keys
+export const SETTINGS_PLAYER_KEY = "raga_settings_player";
+export const SETTINGS_AUDIO_KEY = "raga_settings_audio";
 
 type PlayerContextType = {
   currentTrack: Track | null;
@@ -57,6 +64,13 @@ type PlayerContextType = {
   sleepTimerEnd: number | null;
   startSleepTimer: (minutes: number) => void;
   cancelSleepTimer: () => void;
+  // Shuffle & Repeat
+  shuffleEnabled: boolean;
+  toggleShuffle: () => void;
+  repeatMode: RepeatMode;
+  cycleRepeat: () => void;
+  // Settings (runtime)
+  showVisualizer: boolean;
   // Playback
   playTrack: (track: Track, queue?: Track[]) => Promise<void>;
   togglePlayPause: () => Promise<void>;
@@ -66,6 +80,18 @@ type PlayerContextType = {
 };
 
 const PlayerContext = createContext<PlayerContextType | null>(null);
+
+function shuffleArray<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const left = a[i]!;
+    const right = a[j]!;
+    a[i] = right;
+    a[j] = left;
+  }
+  return a;
+}
 
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const soundRef = useRef<Audio.Sound | null>(null);
@@ -92,15 +118,26 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // Recently played (newest first)
   const [recentlyPlayed, setRecentlyPlayed] = useState<Track[]>([]);
 
+  // Shuffle & Repeat
+  const [shuffleEnabled, setShuffleEnabled] = useState(false);
+  const [repeatMode, setRepeatMode] = useState<RepeatMode>("off");
+
+  // Runtime settings
+  const [showVisualizer, setShowVisualizer] = useState(false);
+  const [disableTimeout, setDisableTimeout] = useState(false);
+  const [crossfadeEnabled, setCrossfadeEnabled] = useState(false);
+
   // ── Load persisted data on mount ──────────────────────────────────────────
   useEffect(() => {
     (async () => {
       try {
-        const [likedRaw, recentRaw, playlistsRaw, downloadsRaw] = await Promise.all([
+        const [likedRaw, recentRaw, playlistsRaw, downloadsRaw, playerSettingsRaw, audioSettingsRaw] = await Promise.all([
           AsyncStorage.getItem(LIKED_KEY),
           AsyncStorage.getItem(RECENT_KEY),
           AsyncStorage.getItem(PLAYLISTS_KEY),
           AsyncStorage.getItem(DOWNLOADS_KEY),
+          AsyncStorage.getItem(SETTINGS_PLAYER_KEY),
+          AsyncStorage.getItem(SETTINGS_AUDIO_KEY),
         ]);
         if (likedRaw) {
           const { ids, tracks } = JSON.parse(likedRaw);
@@ -110,10 +147,52 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         if (recentRaw) setRecentlyPlayed(JSON.parse(recentRaw) ?? []);
         if (playlistsRaw) setPlaylists(JSON.parse(playlistsRaw) ?? []);
         if (downloadsRaw) setDownloads(JSON.parse(downloadsRaw) ?? []);
+
+        // Load player settings
+        if (playerSettingsRaw) {
+          const ps = JSON.parse(playerSettingsRaw);
+          setShowVisualizer(ps.showVis ?? false);
+          setDisableTimeout(ps.disableTimeout ?? false);
+        }
+        // Load audio settings
+        if (audioSettingsRaw) {
+          const as = JSON.parse(audioSettingsRaw);
+          setCrossfadeEnabled(as.crossfade ?? false);
+        }
       } catch {
         // ignore storage errors on cold start
       }
     })();
+  }, []);
+
+  // ── React to disableTimeout setting ──────────────────────────────────────
+  useEffect(() => {
+    if (disableTimeout) {
+      activateKeepAwakeAsync();
+    } else {
+      deactivateKeepAwake();
+    }
+  }, [disableTimeout]);
+
+  // ── Re-read settings whenever app comes to foreground ────────────────────
+  // (settings can change from SettingDetailScreen without full restart)
+  const refreshSettings = useCallback(async () => {
+    try {
+      const [playerSettingsRaw, audioSettingsRaw] = await Promise.all([
+        AsyncStorage.getItem(SETTINGS_PLAYER_KEY),
+        AsyncStorage.getItem(SETTINGS_AUDIO_KEY),
+      ]);
+      if (playerSettingsRaw) {
+        const ps = JSON.parse(playerSettingsRaw);
+        setShowVisualizer(ps.showVis ?? false);
+        const dt = ps.disableTimeout ?? false;
+        setDisableTimeout(dt);
+      }
+      if (audioSettingsRaw) {
+        const as = JSON.parse(audioSettingsRaw);
+        setCrossfadeEnabled(as.crossfade ?? false);
+      }
+    } catch {}
   }, []);
 
   // ── Liked songs helpers ───────────────────────────────────────────────────
@@ -237,20 +316,63 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     }, ms);
   }, [cancelSleepTimer]);
 
+  // ── Shuffle & Repeat ──────────────────────────────────────────────────────
+  const toggleShuffle = useCallback(() => {
+    setShuffleEnabled(prev => {
+      const next = !prev;
+      if (next) {
+        // Shuffle queue, keep current track at front
+        setQueue(q => {
+          if (q.length === 0) return q;
+          const currentIndex = q.findIndex(t => t.id === currentTrack?.id);
+          const current = currentIndex >= 0 ? q[currentIndex] : null;
+          const rest = q.filter((_, i) => i !== currentIndex);
+          const shuffled = shuffleArray(rest);
+          const newQ = current ? [current, ...shuffled] : shuffled;
+          setQueueIndex(0);
+          return newQ;
+        });
+      }
+      return next;
+    });
+  }, [currentTrack]);
+
+  const cycleRepeat = useCallback(() => {
+    setRepeatMode(prev => {
+      if (prev === "off") return "all";
+      if (prev === "all") return "one";
+      return "off";
+    });
+  }, []);
+
   // ── Playback ──────────────────────────────────────────────────────────────
+  // Use refs so closures inside onStatusUpdate always see latest values
+  const repeatModeRef = useRef<RepeatMode>("off");
+  useEffect(() => { repeatModeRef.current = repeatMode; }, [repeatMode]);
+
+  const playNextRef = useRef<(() => void) | null>(null);
+  const seekToRef = useRef<((m: number) => Promise<void>) | null>(null);
+
   const onStatusUpdate = useCallback((status: AVPlaybackStatus) => {
     if (!status.isLoaded) return;
     setPositionMillis(status.positionMillis || 0);
     setDurationMillis(status.durationMillis || 0);
     setIsPlaying(status.isPlaying);
-    if (status.didJustFinish) playNextRef.current?.();
+    if (status.didJustFinish) {
+      const mode = repeatModeRef.current;
+      if (mode === "one") {
+        // Seek back to start and replay
+        seekToRef.current?.(0);
+        soundRef.current?.playAsync();
+      } else {
+        playNextRef.current?.();
+      }
+    }
   }, []);
-
-  // Use a ref so playNext closure inside onStatusUpdate always sees latest version
-  const playNextRef = useRef<(() => void) | null>(null);
 
   const playTrack = useCallback(
     async (track: Track, newQueue?: Track[]) => {
+      await refreshSettings();
       await Audio.setAudioModeAsync({
         staysActiveInBackground: true,
         playsInSilentModeIOS: true,
@@ -275,11 +397,18 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       addToRecent(track);
 
       if (newQueue) {
-        setQueue(newQueue);
-        setQueueIndex(newQueue.findIndex((t) => t.id === track.id));
+        const q = shuffleEnabled ? (() => {
+          const idx = newQueue.findIndex(t => t.id === track.id);
+          const current = idx >= 0 ? newQueue[idx] : null;
+          const rest = newQueue.filter((_, i) => i !== idx);
+          const shuffled = shuffleArray(rest);
+          return current ? [current, ...shuffled] : shuffled;
+        })() : newQueue;
+        setQueue(q);
+        setQueueIndex(q.findIndex((t) => t.id === track.id));
       }
     },
-    [onStatusUpdate, addToRecent, playbackRate, downloads]
+    [onStatusUpdate, addToRecent, playbackRate, downloads, shuffleEnabled, refreshSettings]
   );
 
   const togglePlayPause = useCallback(async () => {
@@ -293,29 +422,37 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const playNext = useCallback(async () => {
     if (queue.length === 0) return;
-    const nextIndex = queueIndex + 1;
-    if (nextIndex < queue.length) {
-      setQueueIndex(nextIndex);
-      await playTrack(queue[nextIndex]);
+    let nextIndex = queueIndex + 1;
+    if (nextIndex >= queue.length) {
+      if (repeatMode === "all") nextIndex = 0;
+      else return;
     }
-  }, [queue, queueIndex, playTrack]);
+    setQueueIndex(nextIndex);
+    const nextTrack = queue[nextIndex];
+    if (!nextTrack) return;
+    await playTrack(nextTrack);
+  }, [queue, queueIndex, playTrack, repeatMode]);
 
-  // Keep ref in sync
+  // Keep refs in sync
   useEffect(() => { playNextRef.current = playNext; }, [playNext]);
+
+  const seekTo = useCallback(async (millis: number) => {
+    if (!soundRef.current) return;
+    await soundRef.current.setPositionAsync(millis);
+  }, []);
+
+  useEffect(() => { seekToRef.current = seekTo; }, [seekTo]);
 
   const playPrevious = useCallback(async () => {
     if (queue.length === 0) return;
     const prevIndex = queueIndex - 1;
     if (prevIndex >= 0) {
       setQueueIndex(prevIndex);
-      await playTrack(queue[prevIndex]);
+      const previousTrack = queue[prevIndex];
+      if (!previousTrack) return;
+      await playTrack(previousTrack);
     }
   }, [queue, queueIndex, playTrack]);
-
-  const seekTo = useCallback(async (millis: number) => {
-    if (!soundRef.current) return;
-    await soundRef.current.setPositionAsync(millis);
-  }, []);
 
   return (
     <PlayerContext.Provider
@@ -342,6 +479,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         sleepTimerEnd,
         startSleepTimer,
         cancelSleepTimer,
+        shuffleEnabled,
+        toggleShuffle,
+        repeatMode,
+        cycleRepeat,
+        showVisualizer,
         playTrack,
         togglePlayPause,
         playNext,

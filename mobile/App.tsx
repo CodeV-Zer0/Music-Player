@@ -12,6 +12,8 @@ import ArtistScreen from "./src/screens/ArtistScreen";
 import NowPlayingScreen from "./src/screens/NowPlayingScreen";
 import LikedSongsScreen from "./src/screens/LikedSongsScreen";
 import SettingsScreen from "./src/screens/SettingsScreen";
+import SettingDetailScreen from "./src/screens/SettingDetailScreen";
+import RecentlyPlayedScreen from "./src/screens/RecentlyPlayedScreen";
 import PlaylistsScreen from "./src/screens/PlaylistsScreen";
 import PlaylistDetailsScreen from "./src/screens/PlaylistDetailsScreen";
 import DownloadsScreen from "./src/screens/DownloadsScreen";
@@ -43,6 +45,8 @@ export default function App() {
               <Stack.Screen name="NowPlaying" component={NowPlayingScreen} options={{ presentation: "modal", animation: "slide_from_bottom" }} />
               <Stack.Screen name="LikedSongs" component={LikedSongsScreen} />
               <Stack.Screen name="Settings" component={SettingsScreen} />
+              <Stack.Screen name="SettingDetail" component={SettingDetailScreen} />
+              <Stack.Screen name="RecentlyPlayed" component={RecentlyPlayedScreen} />
               <Stack.Screen name="Playlists" component={PlaylistsScreen} />
               <Stack.Screen name="PlaylistDetails" component={PlaylistDetailsScreen} />
               <Stack.Screen name="Downloads" component={DownloadsScreen} />

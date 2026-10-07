@@ -50,13 +50,13 @@ export default function SettingsScreen() {
           icon="color-palette-outline"
           label="User Interface"
           subtitle="Customize UI, Tabs, Styles etc."
-          onPress={() => Alert.alert("User Interface", "Theme customization coming soon.")}
+          onPress={() => navigation.navigate("SettingDetail", { category: "ui", title: "User Interface" })}
         />
         <SettingRow
           icon="phone-portrait-outline"
           label="Full Player"
           subtitle="Customize Now Playing Screen"
-          onPress={() => Alert.alert("Full Player", "Player customization coming soon.")}
+          onPress={() => navigation.navigate("SettingDetail", { category: "player", title: "Full Player" })}
         />
 
         <SectionHeader title="AUDIO" />
@@ -64,21 +64,7 @@ export default function SettingsScreen() {
           icon="volume-high-outline"
           label="Audio"
           subtitle="Change Audio Settings"
-          onPress={() => Alert.alert("Audio", "Audio settings coming soon.")}
-        />
-        <SettingRow
-          icon="pulse-outline"
-          label="Visualizer"
-          subtitle="Style, Type & Customization"
-          onPress={() => Alert.alert("Visualizer", "Visualizer coming soon.")}
-        />
-
-        <SectionHeader title="STORAGE" />
-        <SettingRow
-          icon="folder-outline"
-          label="Files & Folder"
-          subtitle="Include or Exclude Folders"
-          onPress={() => Alert.alert("Files & Folder", "Folder management coming soon.")}
+          onPress={() => navigation.navigate("SettingDetail", { category: "audio", title: "Audio Settings" })}
         />
 
         <SectionHeader title="OTHER" />
@@ -86,7 +72,7 @@ export default function SettingsScreen() {
           icon="options-outline"
           label="Advanced"
           subtitle="Advanced Options & Features"
-          onPress={() => Alert.alert("Advanced", "Advanced settings coming soon.")}
+          onPress={() => navigation.navigate("SettingDetail", { category: "advanced", title: "Advanced Settings" })}
         />
         <SettingRow
           icon="information-circle-outline"
@@ -100,35 +86,28 @@ export default function SettingsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background },
+  container: { flex: 1, backgroundColor: "#000000" },
   header: {
     flexDirection: "row", alignItems: "center", justifyContent: "space-between",
     paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
   },
   headerTitle: { color: colors.text, fontSize: 20, fontWeight: "900" },
   sectionHeader: {
-    color: colors.primary, fontSize: 12, fontWeight: "800",
-    letterSpacing: 1, paddingHorizontal: spacing.md,
-    paddingTop: spacing.lg, paddingBottom: spacing.xs,
+    color: colors.textSecondary, fontSize: 13, fontWeight: "700",
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.lg, paddingBottom: spacing.sm,
   },
   row: {
     flexDirection: "row", alignItems: "center",
-    marginHorizontal: spacing.md,
-    marginVertical: 4,
     paddingHorizontal: spacing.md,
-    paddingVertical: 14,
-    borderRadius: 16,
-    backgroundColor: "rgba(13,16,32,0.72)",
-    borderWidth: 1,
-    borderColor: colors.borderSoft,
+    paddingVertical: 12,
+    backgroundColor: "transparent",
   },
   rowIcon: {
-    width: 40, height: 40, borderRadius: 14, backgroundColor: colors.surfaceElevated,
+    width: 24, height: 24,
     alignItems: "center", justifyContent: "center", marginRight: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
   },
   rowText: { flex: 1 },
-  rowLabel: { color: colors.text, fontSize: 16, fontWeight: "700" },
+  rowLabel: { color: colors.text, fontSize: 16, fontWeight: "500" },
   rowSub: { color: colors.textSecondary, fontSize: 13, marginTop: 2 },
 });

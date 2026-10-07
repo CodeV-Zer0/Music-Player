@@ -1,27 +1,50 @@
 import React, { useEffect, useState, useCallback } from "react";
 import {
-  View, Text, FlatList, StyleSheet, TouchableOpacity,
-  RefreshControl, Animated, Easing
+  View,
+  Text,
+  FlatList,
+  StyleSheet,
+  TouchableOpacity,
+  RefreshControl,
+  Animated,
+  Easing,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, NavigationProp } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, spacing } from "../theme/colors";
 import { requestMediaPermission, scanLocalAudio, groupByArtist } from "../services/localLibrary";
-import { usePlayer } from "../context/PlayerContext";
+import { usePlayer, Track } from "../context/PlayerContext";
 import PressableScale from "../components/PressableScale";
+import AlbumArt from "../components/AlbumArt";
+
+type RootStackParamList = {
+  MainTabs: undefined;
+  Artist: { artistName: string };
+  NowPlaying: undefined;
+  LikedSongs: undefined;
+  Settings: undefined;
+  SettingDetail: { category: string; title: string };
+  RecentlyPlayed: undefined;
+  Playlists: undefined;
+  PlaylistDetails: { playlistId: string };
+  Downloads: undefined;
+  Lyrics: undefined;
+};
+
+type ArtistGroup = { name: string; count: number };
 
 export default function LibraryScreen() {
-  const [artists, setArtists] = useState<{ name: string; count: number }[]>([]);
+  const [artists, setArtists] = useState<ArtistGroup[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const navigation = useNavigation<any>();
+  const navigation = useNavigation<NavigationProp<RootStackParamList>>();
   const { likedTracks, recentlyPlayed, playlists, downloads, playTrack } = usePlayer();
 
   const loadData = async (refreshing = false) => {
     if (refreshing) setIsRefreshing(true);
     else setIsLoading(true);
-    
+
     const granted = await requestMediaPermission();
     if (granted) {
       const tracks = await scanLocalAudio();
@@ -31,7 +54,7 @@ export default function LibraryScreen() {
         .sort((a, b) => a.name.localeCompare(b.name));
       setArtists(list);
     }
-    
+
     setIsLoading(false);
     setIsRefreshing(false);
   };
@@ -44,16 +67,15 @@ export default function LibraryScreen() {
     loadData(true);
   }, []);
 
-  const rootNav = () => navigation.getParent?.() ?? navigation;
+  const rootNav = () => (navigation.getParent?.() as any) ?? navigation;
 
-  // Skeleton component for loading state
   const SkeletonRow = () => {
     const pulseValue = new Animated.Value(0.3);
     useEffect(() => {
       Animated.loop(
         Animated.sequence([
           Animated.timing(pulseValue, { toValue: 0.7, duration: 800, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-          Animated.timing(pulseValue, { toValue: 0.3, duration: 800, easing: Easing.inOut(Easing.ease), useNativeDriver: true })
+          Animated.timing(pulseValue, { toValue: 0.3, duration: 800, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
         ])
       ).start();
     }, []);
@@ -72,7 +94,6 @@ export default function LibraryScreen() {
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
       <View style={styles.headerBlock}>
-        <Text style={styles.eyebrow}>Collection</Text>
         <Text style={styles.header}>Your Library</Text>
       </View>
 
@@ -90,11 +111,7 @@ export default function LibraryScreen() {
         }
         ListHeaderComponent={
           <>
-            {/* ── Liked Songs card ──────────────────────────────── */}
-            <PressableScale
-              style={styles.likedCard}
-              onPress={() => navigation.navigate("LikedSongs")}
-            >
+            <PressableScale style={styles.likedCard} onPress={() => navigation.navigate("LikedSongs")}>
               <View style={styles.likedIcon}>
                 <Ionicons name="heart" size={28} color={colors.background} />
               </View>
@@ -105,11 +122,7 @@ export default function LibraryScreen() {
               <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} style={{ marginLeft: "auto" }} />
             </PressableScale>
 
-            {/* Playlists */}
-            <PressableScale
-              style={styles.likedCard}
-              onPress={() => navigation.navigate("Playlists")}
-            >
+            <PressableScale style={styles.likedCard} onPress={() => navigation.navigate("Playlists")}>
               <View style={[styles.likedIcon, styles.playlistIcon]}>
                 <Ionicons name="albums-outline" size={28} color={colors.primary} />
               </View>
@@ -120,11 +133,7 @@ export default function LibraryScreen() {
               <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} style={{ marginLeft: "auto" }} />
             </PressableScale>
 
-            {/* Downloads */}
-            <PressableScale
-              style={styles.likedCard}
-              onPress={() => navigation.navigate("Downloads")}
-            >
+            <PressableScale style={styles.likedCard} onPress={() => navigation.navigate("Downloads")}>
               <View style={[styles.likedIcon, styles.downloadIcon]}>
                 <Ionicons name="cloud-download-outline" size={28} color={colors.background} />
               </View>
@@ -135,7 +144,6 @@ export default function LibraryScreen() {
               <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} style={{ marginLeft: "auto" }} />
             </PressableScale>
 
-            {/* ── Recently Played ───────────────────────────────── */}
             {recentlyPlayed.length > 0 && (
               <View style={styles.section}>
                 <Text style={styles.sectionTitle}>Recently Played</Text>
@@ -150,13 +158,7 @@ export default function LibraryScreen() {
                       style={styles.recentCard}
                       onPress={() => playTrack(item, recentlyPlayed)}
                     >
-                      <View style={styles.recentArt}>
-                        {item.source === "youtube" ? (
-                          <Ionicons name="logo-youtube" size={24} color={colors.danger} />
-                        ) : (
-                          <Ionicons name="musical-note" size={24} color={colors.textSecondary} />
-                        )}
-                      </View>
+                      <AlbumArt track={item} size={110} radius={5} iconSize={30} style={styles.recentArt} />
                       <Text style={styles.recentTitle} numberOfLines={2}>{item.title}</Text>
                       <Text style={styles.recentArtist} numberOfLines={1}>
                         {item.artist_name || "Unknown"}
@@ -167,10 +169,28 @@ export default function LibraryScreen() {
               </View>
             )}
 
-            <Text style={[styles.sectionTitle, { paddingHorizontal: spacing.md, marginTop: spacing.md }]}>
-              Artists
-            </Text>
-            
+            {playlists.length > 0 && (
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Your playlists</Text>
+                {playlists.map((playlist) => (
+                  <PressableScale
+                    key={playlist.id}
+                    style={styles.row}
+                    onPress={() => navigation.navigate("PlaylistDetails", { playlistId: playlist.id })}
+                  >
+                    <AlbumArt track={playlist.tracks[0]} size={48} radius={4} iconSize={20} style={styles.playlistArt} />
+                    <View style={styles.rowInfo}>
+                      <Text style={styles.title} numberOfLines={1}>{playlist.name}</Text>
+                      <Text style={styles.subtitle}>Playlist · {playlist.tracks.length} songs</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color={colors.textSecondary} />
+                  </PressableScale>
+                ))}
+              </View>
+            )}
+
+            <Text style={[styles.sectionTitle, { paddingHorizontal: spacing.md, marginTop: spacing.md }]}>Artists</Text>
+
             {isLoading && (
               <>
                 <SkeletonRow />
@@ -212,70 +232,58 @@ export default function LibraryScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  headerBlock: { paddingHorizontal: spacing.md, paddingTop: spacing.sm, paddingBottom: spacing.md },
-  eyebrow: { color: colors.primary, fontSize: 12, fontWeight: "800", textTransform: "uppercase", marginBottom: 3 },
-  header: { color: colors.text, fontSize: 30, fontWeight: "900" },
+  headerBlock: { paddingHorizontal: spacing.md, paddingTop: spacing.md, paddingBottom: spacing.sm },
+  header: { color: colors.text, fontSize: 24, fontWeight: "800" },
 
-  // Liked Songs card
   likedCard: {
-    flexDirection: "row", alignItems: "center",
-    marginHorizontal: spacing.md, marginBottom: spacing.md,
-    backgroundColor: colors.surface, borderRadius: 18, padding: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.borderSoft,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+    backgroundColor: "transparent",
   },
   likedIcon: {
-    width: 52, height: 52, borderRadius: 16,
-    backgroundColor: colors.primary,
-    alignItems: "center", justifyContent: "center",
-    marginRight: spacing.md,
-    shadowColor: colors.primary,
-    shadowOpacity: 0.28,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 8,
+    width: 48,
+    height: 48,
+    borderRadius: 4,
+    backgroundColor: colors.surfaceElevated,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
   },
-  playlistIcon: { backgroundColor: "rgba(0,229,255,0.08)", borderWidth: 1, borderColor: colors.border },
-  downloadIcon: { backgroundColor: colors.success },
-  likedTitle: { color: colors.text, fontSize: 16, fontWeight: "700" },
-  likedSub: { color: colors.textSecondary, fontSize: 13, marginTop: 2 },
+  playlistIcon: { backgroundColor: colors.surfaceElevated },
+  downloadIcon: { backgroundColor: colors.surfaceElevated },
+  likedTitle: { color: colors.text, fontSize: 16, fontWeight: "500", marginBottom: 2 },
+  likedSub: { color: colors.textSecondary, fontSize: 13 },
 
-  // Recently played
-  section: { marginBottom: spacing.sm },
+  section: { marginBottom: spacing.md, marginTop: spacing.sm },
   sectionTitle: { color: colors.text, fontSize: 18, fontWeight: "700", marginBottom: spacing.sm, paddingHorizontal: spacing.md },
-  recentCard: { width: 126, marginRight: spacing.sm },
-  recentArt: {
-    width: 126, height: 126, backgroundColor: colors.surfaceElevated,
-    borderRadius: 18, alignItems: "center", justifyContent: "center",
-    marginBottom: 6,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  recentTitle: { color: colors.text, fontSize: 13, fontWeight: "500" },
+  recentCard: { width: 110, marginRight: spacing.md },
+  recentArt: { marginBottom: 8 },
+  recentTitle: { color: colors.text, fontSize: 13, fontWeight: "600", marginBottom: 2 },
   recentArtist: { color: colors.textSecondary, fontSize: 12 },
 
-  // Artists
   row: {
     flexDirection: "row",
     alignItems: "center",
-    marginHorizontal: spacing.md,
-    marginVertical: 4,
-    padding: spacing.md,
-    borderRadius: 16,
-    backgroundColor: "rgba(13,16,32,0.58)",
-    borderWidth: 1,
-    borderColor: colors.borderSoft,
+    paddingVertical: 10,
+    paddingHorizontal: spacing.md,
+    backgroundColor: "transparent",
   },
+  rowInfo: { flex: 1, minWidth: 0 },
+  playlistArt: { marginRight: 12 },
   cover: {
-    width: 50, height: 50, borderRadius: 25, backgroundColor: colors.surfaceElevated,
-    alignItems: "center", justifyContent: "center", marginRight: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: colors.surfaceElevated,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
   },
-  title: { color: colors.text, fontSize: 15, fontWeight: "600" },
+  title: { color: colors.text, fontSize: 16, fontWeight: "500", marginBottom: 2 },
   subtitle: { color: colors.textSecondary, fontSize: 13 },
-  
-  // Empty State
+
   emptyContainer: {
     alignItems: "center",
     justifyContent: "center",

@@ -57,7 +57,7 @@ export async function searchYouTube(query: string, filter: 'music_songs' | 'musi
       .filter((i) => i.type === 'stream' && i.url)
       .slice(0, 30)
       .map((i) => ({
-        id: (i.url as string).replace('/watch?v=', '').split('&')[0],
+        id: (i.url as string).replace('/watch?v=', '').split('&')[0] || i.videoId || '',
         title: i.title ?? 'Unknown',
         artist_name: i.uploaderName ?? 'Unknown Artist',
         thumbnail: i.thumbnail ?? '',
@@ -87,7 +87,7 @@ export async function getPlaylistTracks(playlistId: string): Promise<YouTubeTrac
   return items
     .filter((i) => i.url && i.type === 'stream')
     .map((i) => ({
-      id: (i.url as string).replace('/watch?v=', '').split('&')[0],
+      id: (i.url as string).replace('/watch?v=', '').split('&')[0] || i.videoId || '',
       title: i.title ?? 'Unknown',
       artist_name: i.uploaderName ?? 'Unknown Artist',
       thumbnail: i.thumbnail ?? '',

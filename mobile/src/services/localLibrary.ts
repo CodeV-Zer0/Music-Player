@@ -1,13 +1,16 @@
 import * as MediaLibrary from "expo-media-library";
+import * as FileSystem from "expo-file-system/legacy";
+import { Buffer } from "buffer";
 
 export type LocalTrack = {
   id: string;
   title: string;
   artist_name?: string;
   album_title?: string;
-  uri: string; // local file:// URI — playable directly, no network needed
-  duration?: number; // seconds
-  filename?: string; // optional — YouTube tracks won't have this
+  uri: string;
+  duration?: number;
+  filename?: string;
+  thumbnail?: string;
 };
 
 export async function requestMediaPermission(): Promise<boolean> {
@@ -15,8 +18,23 @@ export async function requestMediaPermission(): Promise<boolean> {
   return status === "granted";
 }
 
-// Scans the phone's media library for audio files and returns them as tracks.
-// Runs in pages under the hood since some libraries have thousands of files.
+// Strip junk watermarks like [iSongs.info], (Songspk), etc.
+// Also reject pure-digit strings (track numbers) as artist names.
+const cleanString = (str?: string): string | undefined => {
+  if (!str) return undefined;
+  let cleaned = str.replace(/\[.*?\]|\(.*?\)/g, "").trim();
+  if (
+    !cleaned ||
+    cleaned.toLowerCase() === "unknown" ||
+    cleaned.toLowerCase() === "unknown artist" ||
+    /^\d+$/.test(cleaned) // reject bare numbers like "01", "02"
+  ) return undefined;
+  return cleaned;
+};
+
+const getCacheUri = (id: string) => `${FileSystem.cacheDirectory}art_${id}.jpg`;
+
+// ── Main scan — fast, filename-based ────────────────────────────────────────
 export async function scanLocalAudio(): Promise<LocalTrack[]> {
   const allTracks: LocalTrack[] = [];
   let hasNextPage = true;
@@ -30,16 +48,18 @@ export async function scanLocalAudio(): Promise<LocalTrack[]> {
     });
 
     for (const asset of page.assets) {
-      // Try to split "Artist - Title.mp3" style filenames; otherwise just use the filename.
       const nameWithoutExt = asset.filename.replace(/\.[^/.]+$/, "");
+      // Try "Artist - Title" split
       const parts = nameWithoutExt.split(" - ");
-      const artist = parts.length > 1 ? parts[0].trim() : undefined;
-      const title = parts.length > 1 ? parts.slice(1).join(" - ").trim() : nameWithoutExt;
+      let artist = parts.length > 1 ? cleanString(parts[0]) : undefined;
+      let title = parts.length > 1
+        ? cleanString(parts.slice(1).join(" - ")) || parts.slice(1).join(" - ").trim()
+        : cleanString(nameWithoutExt) || nameWithoutExt;
 
       allTracks.push({
         id: asset.id,
         title,
-        artist_name: artist,
+        artist_name: artist, // undefined → "Unknown Artist" at render time
         uri: asset.uri,
         duration: asset.duration,
         filename: asset.filename,
@@ -53,9 +73,30 @@ export async function scanLocalAudio(): Promise<LocalTrack[]> {
   return allTracks;
 }
 
-// Groups tracks by artist_name for a simple "Library" view, since local files
-// rarely have reliable album metadata the way music-metadata parsing on a
-// server would give us.
+// ── Lazy artwork extraction — called per-track only on demand ────────────────
+// Returns the local file:// URI of cached artwork, or undefined.
+export async function extractArtwork(track: LocalTrack): Promise<string | undefined> {
+  try {
+    const cacheUri = getCacheUri(track.id);
+    const info = await FileSystem.getInfoAsync(cacheUri);
+    if (info.exists) return cacheUri;
+
+    // Dynamically import so it doesn't slow down initial scan
+    const mm = await import("music-metadata-browser");
+    const metadata = await mm.fetchFromUrl(track.uri);
+    const pic = metadata?.common?.picture?.[0];
+    if (!pic) return undefined;
+
+    const base64Str = Buffer.from(pic.data).toString("base64");
+    await FileSystem.writeAsStringAsync(cacheUri, base64Str, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    return cacheUri;
+  } catch {
+    return undefined;
+  }
+}
+
 export function groupByArtist(tracks: LocalTrack[]): Record<string, LocalTrack[]> {
   const groups: Record<string, LocalTrack[]> = {};
   for (const track of tracks) {

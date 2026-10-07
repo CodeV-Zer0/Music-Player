@@ -1,18 +1,34 @@
 import React, { useEffect, useState } from "react";
-import { Alert, View, Text, FlatList, StyleSheet, TouchableOpacity } from "react-native";
+import { View, Text, FlatList, StyleSheet, TouchableOpacity } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, spacing } from "../theme/colors";
 import { requestMediaPermission, scanLocalAudio, LocalTrack } from "../services/localLibrary";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, NavigationProp, ParamListBase } from "@react-navigation/native";
 import { usePlayer } from "../context/PlayerContext";
 import TrackRow from "../components/TrackRow";
+import AlbumArt from "../components/AlbumArt";
+import PressableScale from "../components/PressableScale";
+
+type RootStackParamList = {
+  MainTabs: undefined;
+  Artist: { artistName: string };
+  NowPlaying: undefined;
+  LikedSongs: undefined;
+  Settings: undefined;
+  SettingDetail: { category: string; title: string };
+  RecentlyPlayed: undefined;
+  Playlists: undefined;
+  PlaylistDetails: { playlistId: string };
+  Downloads: undefined;
+  Lyrics: undefined;
+};
 
 export default function HomeScreen() {
   const [tracks, setTracks] = useState<LocalTrack[]>([]);
   const [status, setStatus] = useState<"loading" | "denied" | "ready">("loading");
-  const { playTrack } = usePlayer();
-  const navigation = useNavigation<any>();
+  const { playTrack, recentlyPlayed, likedTracks } = usePlayer();
+  const navigation = useNavigation<NavigationProp<RootStackParamList>>();
 
   const loadLibrary = async () => {
     setStatus("loading");
@@ -39,59 +55,43 @@ export default function HomeScreen() {
     return (
       <View style={styles.headerContainer}>
         <View style={styles.topBar}>
-          <View>
-            <Text style={styles.eyebrow}>Raga neon</Text>
-            <Text style={styles.headerTitle}>{greeting}</Text>
-          </View>
+          <Text style={styles.headerTitle}>{greeting}</Text>
           <View style={styles.topBarRight}>
             <TouchableOpacity
               hitSlop={10}
               style={styles.topBarButton}
-              onPress={() => Alert.alert("Notifications", "You are all caught up.")}
+              onPress={() => navigation.navigate("RecentlyPlayed")}
             >
-              <Ionicons name="notifications-outline" size={21} color={colors.text} />
-            </TouchableOpacity>
-            <TouchableOpacity
-              hitSlop={10}
-              style={styles.topBarButton}
-              onPress={() => Alert.alert("Recently played", "Recently played songs will appear here.")}
-            >
-              <Ionicons name="time-outline" size={21} color={colors.text} />
+              <Ionicons name="time-outline" size={24} color={colors.text} />
             </TouchableOpacity>
             <TouchableOpacity
               hitSlop={10}
               style={styles.topBarButton}
               onPress={() => navigation.navigate("Settings")}
             >
-              <Ionicons name="settings-outline" size={21} color={colors.text} />
+              <Ionicons name="settings-outline" size={24} color={colors.text} />
             </TouchableOpacity>
           </View>
         </View>
-
-        <View style={styles.heroCard}>
-          <View style={styles.heroGlow} />
-          <View style={styles.heroCopy}>
-            <Text style={styles.heroKicker}>Offline ready</Text>
-            <Text style={styles.heroTitle}>Your sound grid is live</Text>
-            <Text style={styles.heroSub}>{tracks.length} local tracks scanned and ready to play.</Text>
-          </View>
-          <View style={styles.visualizer}>
-            {[24, 42, 30, 54, 36].map((height, index) => (
-              <View key={index} style={[styles.visualizerBar, { height }]} />
-            ))}
-          </View>
+        <View style={styles.quickGrid}>
+          {(recentlyPlayed.length > 0 ? recentlyPlayed.slice(0, 4) : likedTracks.slice(0, 4)).map((track) => (
+            <PressableScale
+              key={`quick-${track.id}`}
+              style={styles.quickTile}
+              onPress={() => playTrack(track, recentlyPlayed.length > 0 ? recentlyPlayed : likedTracks)}
+            >
+              <AlbumArt track={track} size={48} radius={0} iconSize={19} />
+              <Text numberOfLines={2} style={styles.quickTitle}>{track.title}</Text>
+            </PressableScale>
+          ))}
+          {recentlyPlayed.length === 0 && likedTracks.length === 0 && (
+            <PressableScale style={styles.quickTile} onPress={() => navigation.navigate("Playlists")}>
+              <View style={styles.quickPlaceholder}><Ionicons name="albums" size={22} color={colors.primary} /></View>
+              <Text numberOfLines={2} style={styles.quickTitle}>Your library</Text>
+            </PressableScale>
+          )}
         </View>
-
-        <View style={styles.quickRow}>
-          <View style={styles.quickChip}>
-            <Ionicons name="flash" size={14} color={colors.primary} />
-            <Text style={styles.quickText}>Dynamic mix</Text>
-          </View>
-          <View style={styles.quickChip}>
-            <Ionicons name="cloud-offline" size={14} color={colors.success} />
-            <Text style={styles.quickText}>Airplane mode</Text>
-          </View>
-        </View>
+        <Text style={styles.sectionTitle}>On your device</Text>
       </View>
     );
   };
@@ -99,7 +99,15 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
       <View style={{ flex: 1 }}>
-        {status === "loading" && <Text style={styles.empty}>Scanning your phone for music…</Text>}
+        {status === "loading" && (
+          <FlatList
+            data={["one", "two", "three", "four", "five", "six"]}
+            keyExtractor={(item) => item}
+            ListHeaderComponent={renderHeader}
+            contentContainerStyle={styles.listContent}
+            renderItem={() => <SkeletonRow />}
+          />
+        )}
 
         {status === "denied" && (
           <View style={styles.center}>
@@ -113,7 +121,16 @@ export default function HomeScreen() {
         )}
 
         {status === "ready" && tracks.length === 0 && (
-          <Text style={styles.empty}>No audio files found on this device.</Text>
+          <View style={styles.emptyState}>
+            <View style={styles.emptyIcon}>
+              <Ionicons name="musical-notes" size={34} color={colors.primary} />
+            </View>
+            <Text style={styles.emptyTitle}>No music found</Text>
+            <Text style={styles.empty}>Add audio files to your device, then scan your library again.</Text>
+            <TouchableOpacity style={styles.retryButton} onPress={loadLibrary}>
+              <Text style={styles.retryText}>Scan again</Text>
+            </TouchableOpacity>
+          </View>
         )}
 
         {status === "ready" && tracks.length > 0 && (
@@ -134,69 +151,40 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  headerContainer: { padding: spacing.md, paddingTop: spacing.sm, paddingBottom: spacing.md },
-  topBar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: spacing.md },
-  eyebrow: { color: colors.primary, fontSize: 12, fontWeight: "800", textTransform: "uppercase", marginBottom: 3 },
-  headerTitle: { color: colors.text, fontSize: 28, fontWeight: "900" },
-  topBarRight: { flexDirection: "row", alignItems: "center" },
+  headerContainer: { padding: spacing.md, paddingTop: spacing.md, paddingBottom: spacing.sm },
+  topBar: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  headerTitle: { color: colors.text, fontSize: 24, fontWeight: "800" },
+  topBarRight: { flexDirection: "row", alignItems: "center", gap: spacing.md },
   topBarButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: colors.surfaceElevated,
-    borderWidth: 1,
-    borderColor: colors.borderSoft,
     alignItems: "center",
     justifyContent: "center",
-    marginLeft: spacing.sm,
   },
-  heroCard: {
-    minHeight: 148,
-    borderRadius: 20,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    padding: spacing.lg,
-    overflow: "hidden",
-    flexDirection: "row",
-    alignItems: "flex-end",
-    shadowColor: colors.primary,
-    shadowOpacity: 0.24,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: 10 },
-    elevation: 12,
-  },
-  heroGlow: {
-    position: "absolute",
-    right: -44,
-    top: -40,
-    width: 170,
-    height: 170,
-    borderRadius: 85,
-    backgroundColor: colors.glowPink,
-  },
-  heroCopy: { flex: 1, paddingRight: spacing.md },
-  heroKicker: { color: colors.primary, fontSize: 12, fontWeight: "800", textTransform: "uppercase", marginBottom: 8 },
-  heroTitle: { color: colors.text, fontSize: 24, fontWeight: "900", lineHeight: 29 },
-  heroSub: { color: colors.textSecondary, fontSize: 13, marginTop: 8, lineHeight: 18 },
-  visualizer: { width: 78, height: 70, flexDirection: "row", alignItems: "flex-end", justifyContent: "space-between" },
-  visualizerBar: { width: 9, borderRadius: 8, backgroundColor: colors.primary },
-  quickRow: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.md },
-  quickChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 18,
-    backgroundColor: "rgba(255,255,255,0.05)",
-    borderWidth: 1,
-    borderColor: colors.borderSoft,
-  },
-  quickText: { color: colors.textSecondary, fontSize: 12, fontWeight: "700" },
-  empty: { color: colors.textSecondary, padding: spacing.md, textAlign: "center", marginTop: 40 },
+  quickGrid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", marginTop: spacing.md },
+  quickTile: { width: "49%", minHeight: 54, flexDirection: "row", alignItems: "center", backgroundColor: colors.surfaceElevated, marginBottom: 6, overflow: "hidden", borderRadius: 4 },
+  quickPlaceholder: { width: 48, height: 48, alignItems: "center", justifyContent: "center", backgroundColor: colors.surface },
+  quickTitle: { flex: 1, color: colors.text, fontSize: 11, fontWeight: "700", paddingHorizontal: 8 },
+  sectionTitle: { color: colors.text, fontSize: 19, fontWeight: "800", marginTop: spacing.md },
+  empty: { color: colors.textSecondary, padding: spacing.md, textAlign: "center", lineHeight: 20 },
+  emptyState: { flex: 1, alignItems: "center", justifyContent: "center", paddingHorizontal: 32 },
+  emptyIcon: { width: 76, height: 76, borderRadius: 38, alignItems: "center", justifyContent: "center", backgroundColor: colors.surfaceElevated, marginBottom: 18 },
+  emptyTitle: { color: colors.text, fontSize: 20, fontWeight: "800", marginBottom: 4 },
   center: { alignItems: "center", justifyContent: "center", padding: spacing.lg, flex: 1 },
   retryButton: { backgroundColor: colors.primary, paddingVertical: 12, paddingHorizontal: 24, borderRadius: 24, marginTop: spacing.md },
   retryText: { color: colors.background, fontWeight: "bold", fontSize: 16 },
   listContent: { paddingBottom: 150 },
+  skeletonRow: { height: 64, flexDirection: "row", alignItems: "center", paddingHorizontal: spacing.md },
+  skeletonArt: { width: 48, height: 48, borderRadius: 4, backgroundColor: colors.surfaceElevated, marginRight: 12 },
+  skeletonLine: { height: 13, borderRadius: 4, backgroundColor: colors.surfaceElevated, marginBottom: 8 },
 });
+
+function SkeletonRow() {
+  return (
+    <View style={styles.skeletonRow}>
+      <View style={styles.skeletonArt} />
+      <View style={{ flex: 1 }}>
+        <View style={[styles.skeletonLine, { width: "64%" }]} />
+        <View style={[styles.skeletonLine, { width: "42%", height: 10, marginBottom: 0 }]} />
+      </View>
+    </View>
+  );
+}
