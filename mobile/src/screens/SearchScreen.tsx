@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   View,
   TextInput,
@@ -6,83 +6,63 @@ import {
   StyleSheet,
   Text,
   TouchableOpacity,
-  ActivityIndicator,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useNavigation } from "@react-navigation/native";
 import { colors, spacing } from "../theme/colors";
-import { requestMediaPermission, scanLocalAudio, LocalTrack } from "../services/localLibrary";
-import { usePlayer } from "../context/PlayerContext";
-import { searchYouTube, YouTubeTrack } from "../services/pipedApi";
+import { LocalTrack } from "../services/localLibrary";
+import { useLibrary } from "../context/LibraryContext";
+import { Track, usePlayer } from "../context/PlayerContext";
 import TrackRow from "../components/TrackRow";
-import { Track } from "../context/PlayerContext";
+import { TRACK_LIST_PERF } from "../components/listPerf";
+import * as Haptics from "expo-haptics";
 
-type SearchSource = "local" | "youtube";
+type SearchFilterType = "all" | "songs" | "artists";
 
 export default function SearchScreen() {
   const [query, setQuery] = useState("");
-  const [allLocalTracks, setAllLocalTracks] = useState<LocalTrack[]>([]);
-  const [youtubeResults, setYoutubeResults] = useState<YouTubeTrack[]>([]);
-  const [selectedSource, setSelectedSource] = useState<SearchSource>("local");
-  const [isSearchingYoutube, setIsSearchingYoutube] = useState(false);
-  const { playTrack } = usePlayer();
-  const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  const [filterType, setFilterType] = useState<SearchFilterType>("all");
+  const navigation = useNavigation<any>();
+  const { playTrack, playShuffled } = usePlayer();
+  const { tracks: allTracks } = useLibrary();
+  const resultsRef = useRef<LocalTrack[]>([]);
 
-  useEffect(() => {
-    requestMediaPermission().then((granted) => {
-      if (granted) scanLocalAudio().then(setAllLocalTracks);
+  const playFromResults = useCallback((track: Track) => {
+    void playTrack(track, resultsRef.current);
+  }, [playTrack]);
+
+  const filteredResults = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+
+    return allTracks.filter((t) => {
+      const matchTitle = t.title.toLowerCase().includes(q);
+      const matchArtist = (t.artist_name || "").toLowerCase().includes(q);
+
+      if (filterType === "songs") return matchTitle;
+      if (filterType === "artists") return matchArtist;
+      return matchTitle || matchArtist;
     });
-  }, []);
+  }, [allTracks, query, filterType]);
 
-  const localResults = query.trim()
-    ? allLocalTracks.filter(
-        (t) =>
-          t.title.toLowerCase().includes(query.toLowerCase()) ||
-          (t.artist_name || "").toLowerCase().includes(query.toLowerCase())
-      )
-    : [];
-
-  const searchYouTubeDebounced = useCallback((searchQuery: string) => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-
-    if (searchQuery.trim().length < 2) {
-      setYoutubeResults([]);
-      return;
+  const artistResults = useMemo(() => {
+    const byArtist = new Map<string, LocalTrack>();
+    for (const track of filteredResults) {
+      const name = track.artist_name?.trim();
+      if (name && !byArtist.has(name.toLowerCase())) byArtist.set(name.toLowerCase(), { ...track, artist_name: name });
     }
+    return [...byArtist.values()];
+  }, [filteredResults]);
 
-    setIsSearchingYoutube(true);
-    debounceRef.current = setTimeout(async () => {
-      try {
-        const results = await searchYouTube(searchQuery.trim(), "music_songs");
-        setYoutubeResults(results);
-      } catch (error) {
-        console.warn("YouTube search failed:", error);
-        setYoutubeResults([]);
-      } finally {
-        setIsSearchingYoutube(false);
-      }
-    }, 300);
-  }, []);
+  const visibleResults = filterType === "artists" ? artistResults : filteredResults;
+  resultsRef.current = filteredResults;
 
-  useEffect(() => {
-    if (selectedSource === "youtube") {
-      searchYouTubeDebounced(query);
-    }
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [query, selectedSource, searchYouTubeDebounced]);
-
-  const currentResults = selectedSource === "local" ? localResults : youtubeResults;
-  const isLoading = selectedSource === "youtube" && isSearchingYoutube;
-
-  const handleTrackPress = (track: Track, queue: Track[]) => {
-    playTrack(track, queue);
+  const handleShuffleResults = () => {
+    if (filteredResults.length === 0) return;
+    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => undefined);
+    void playShuffled(filteredResults);
   };
-
-  const renderItem = ({ item }: { item: Track }) => (
-    <TrackRow track={item} onPress={() => handleTrackPress(item, currentResults as Track[])} />
-  );
 
   return (
     <SafeAreaView style={styles.container} edges={["top"]}>
@@ -90,11 +70,12 @@ export default function SearchScreen() {
         <Text style={styles.header}>Search</Text>
       </View>
 
+      {/* Dynamic Search Box */}
       <View style={styles.searchBox}>
         <Ionicons name="search" size={18} color={colors.textSecondary} style={{ marginRight: 8 }} />
         <TextInput
           style={styles.input}
-          placeholder="Songs, artists, albums…"
+          placeholder="Songs or artists…"
           placeholderTextColor={colors.textSecondary}
           value={query}
           onChangeText={setQuery}
@@ -108,61 +89,83 @@ export default function SearchScreen() {
         )}
       </View>
 
-      <View style={styles.sourceTabs}>
-        <TouchableOpacity
-          style={[styles.sourceTab, selectedSource === "local" && styles.sourceTabActive]}
-          onPress={() => setSelectedSource("local")}
-        >
-          <Text style={[styles.sourceTabText, selectedSource === "local" && styles.sourceTabTextActive]}>Local</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.sourceTab, selectedSource === "youtube" && styles.sourceTabActive]}
-          onPress={() => setSelectedSource("youtube")}
-        >
-          <Text style={[styles.sourceTabText, selectedSource === "youtube" && styles.sourceTabTextActive]}>YouTube</Text>
-        </TouchableOpacity>
-      </View>
+      {/* Dynamic Filter Pills */}
+      {query.trim().length > 0 && (
+        <View style={styles.pillsRow}>
+          <TouchableOpacity
+            style={[styles.pill, filterType === "all" && styles.pillActive]}
+            onPress={() => setFilterType("all")}
+          >
+            <Text style={[styles.pillText, filterType === "all" && styles.pillTextActive]}>
+              Top Results
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.pill, filterType === "songs" && styles.pillActive]}
+            onPress={() => setFilterType("songs")}
+          >
+            <Text style={[styles.pillText, filterType === "songs" && styles.pillTextActive]}>
+              Songs
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.pill, filterType === "artists" && styles.pillActive]}
+            onPress={() => setFilterType("artists")}
+          >
+            <Text style={[styles.pillText, filterType === "artists" && styles.pillTextActive]}>
+              Artists
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Header with result count & shuffle button */}
+      {visibleResults.length > 0 && (
+        <View style={styles.metaHeader}>
+          <Text style={styles.metaCount}>
+            {visibleResults.length} {visibleResults.length === 1 ? "result" : "results"}
+          </Text>
+          <TouchableOpacity style={styles.shuffleBtn} onPress={handleShuffleResults}>
+            <Ionicons name="shuffle" size={15} color={colors.background} />
+            <Text style={styles.shuffleBtnText}>Play All</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       <FlatList
-        data={currentResults}
-        keyExtractor={(t) => t.id}
-        contentContainerStyle={{ paddingBottom: 120 }}
+        data={visibleResults}
+        keyExtractor={(t) => (filterType === "artists" ? `artist-${t.artist_name}` : t.id)}
+        contentContainerStyle={{ paddingBottom: 130 }}
         keyboardShouldPersistTaps="handled"
-        renderItem={renderItem}
+        {...TRACK_LIST_PERF}
+        renderItem={({ item }) => filterType === "artists" ? (
+          <TouchableOpacity
+            style={styles.artistResult}
+            activeOpacity={0.7}
+            onPress={() => navigation.navigate("Artist", { artistName: item.artist_name })}
+          >
+            <View style={styles.artistIcon}><Ionicons name="person" size={20} color={colors.textSecondary} /></View>
+            <View style={styles.artistInfo}>
+              <Text numberOfLines={1} style={styles.artistName}>{item.artist_name}</Text>
+              <Text style={styles.artistHint}>Artist</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={colors.textSecondary} />
+          </TouchableOpacity>
+        ) : (
+          <TrackRow track={item} onPlay={playFromResults} />
+        )}
         ListEmptyComponent={
           query.trim() ? (
-            isLoading ? (
-              <View style={styles.loadingContainer}>
-                <ActivityIndicator size="large" color={colors.primary} />
-                <Text style={styles.loadingText}>Searching YouTube…</Text>
-              </View>
-            ) : (
-              <View style={styles.emptyHint}>
-                <Ionicons
-                  name={selectedSource === "local" ? "search-outline" : "logo-youtube"}
-                  size={56}
-                  color={colors.textSecondary}
-                  style={{ opacity: 0.4 }}
-                />
-                <Text style={styles.emptyHintTitle}>
-                  {selectedSource === "local" ? "No local songs match" : "No YouTube results"}
-                </Text>
-                <Text style={styles.emptyHintSub}>
-                  {selectedSource === "local"
-                    ? `No songs match "${query}"`
-                    : "Try a different search term"}
-                </Text>
-              </View>
-            )
+            <View style={styles.emptyHint}>
+              <Ionicons name="search-outline" size={54} color={colors.textSecondary} style={{ opacity: 0.4 }} />
+              <Text style={styles.emptyHintTitle}>No songs match "{query}"</Text>
+              <Text style={styles.emptyHintSub}>Check the spelling or search for another artist.</Text>
+            </View>
           ) : (
             <View style={styles.emptyHint}>
-              <Ionicons name="search-outline" size={56} color={colors.textSecondary} style={{ opacity: 0.4 }} />
+              <Ionicons name="musical-notes-outline" size={56} color={colors.textSecondary} style={{ opacity: 0.4 }} />
               <Text style={styles.emptyHintTitle}>Search your library</Text>
-              <Text style={styles.emptyHintSub}>
-                {selectedSource === "local"
-                  ? "Find songs or artists from your device"
-                  : "Search YouTube for any song"}
-              </Text>
+              <Text style={styles.emptyHintSub}>Find any track or artist stored on your device</Text>
             </View>
           )
         }
@@ -175,7 +178,6 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   headerBlock: { paddingHorizontal: spacing.md, paddingTop: spacing.md, paddingBottom: spacing.sm },
   header: { color: colors.text, fontSize: 24, fontWeight: "800" },
-
   searchBox: {
     flexDirection: "row",
     alignItems: "center",
@@ -183,55 +185,70 @@ const styles = StyleSheet.create({
     marginHorizontal: spacing.md,
     borderRadius: 8,
     paddingHorizontal: spacing.md,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.xs,
     height: 44,
   },
   input: { flex: 1, color: colors.text, fontSize: 15, paddingVertical: 0 },
-
-  sourceTabs: {
+  pillsRow: {
     flexDirection: "row",
-    marginHorizontal: spacing.md,
-    marginBottom: spacing.sm,
-    backgroundColor: colors.surfaceElevated,
-    borderRadius: 8,
-    padding: 4,
-  },
-  sourceTab: {
-    flex: 1,
+    paddingHorizontal: spacing.md,
     paddingVertical: 8,
-    alignItems: "center",
-    borderRadius: 6,
+    gap: 8,
   },
-  sourceTabActive: {
+  pill: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 18,
+    backgroundColor: colors.surfaceElevated,
+  },
+  pillActive: {
     backgroundColor: colors.primary,
   },
-  sourceTabText: {
+  pillText: {
     color: colors.textSecondary,
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: "600",
   },
-  sourceTabTextActive: {
+  pillTextActive: {
     color: colors.background,
+    fontWeight: "800",
   },
-
-  loadingContainer: {
+  metaHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
     alignItems: "center",
-    paddingTop: 60,
-    paddingHorizontal: 32,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
   },
-  loadingText: {
+  metaCount: {
     color: colors.textSecondary,
-    marginTop: spacing.md,
-    fontSize: 14,
+    fontSize: 12,
+    fontWeight: "500",
   },
-
-  empty: { color: colors.textSecondary, textAlign: "center", marginTop: 40, paddingHorizontal: spacing.lg },
-
+  shuffleBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 16,
+    gap: 4,
+  },
+  shuffleBtnText: {
+    color: colors.background,
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  artistResult: { minHeight: 64, flexDirection: "row", alignItems: "center", paddingHorizontal: spacing.md },
+  artistIcon: { width: 46, height: 46, borderRadius: 23, backgroundColor: colors.surfaceElevated, alignItems: "center", justifyContent: "center", marginRight: 12 },
+  artistInfo: { flex: 1, minWidth: 0 },
+  artistName: { color: colors.text, fontSize: 15, fontWeight: "600" },
+  artistHint: { color: colors.textSecondary, fontSize: 12, marginTop: 3 },
   emptyHint: {
     alignItems: "center",
-    paddingTop: 60,
+    paddingTop: 80,
     paddingHorizontal: 32,
   },
-  emptyHintTitle: { color: colors.text, fontSize: 18, fontWeight: "700", marginTop: 16, marginBottom: 8 },
+  emptyHintTitle: { color: colors.text, fontSize: 18, fontWeight: "700", marginTop: 16, marginBottom: 6 },
   emptyHintSub: { color: colors.textSecondary, fontSize: 14, textAlign: "center" },
 });

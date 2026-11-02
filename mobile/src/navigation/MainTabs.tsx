@@ -1,6 +1,7 @@
 import React from "react";
 import { View, StyleSheet } from "react-native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { useIsFocused } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { colors } from "../theme/colors";
 import HomeScreen from "../screens/HomeScreen";
@@ -11,6 +12,8 @@ import MiniPlayer from "../components/MiniPlayer";
 const Tab = createBottomTabNavigator();
 
 export default function MainTabs() {
+  const isFocused = useIsFocused();
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       <Tab.Navigator
@@ -31,9 +34,11 @@ export default function MainTabs() {
         <Tab.Screen name="Search" component={SearchScreen} />
         <Tab.Screen name="Library" component={LibraryScreen} />
       </Tab.Navigator>
-      <View style={styles.miniPlayerWrapper}>
-        <MiniPlayer />
-      </View>
+      {isFocused && (
+        <View style={styles.miniPlayerWrapper}>
+          <MiniPlayer />
+        </View>
+      )}
     </View>
   );
 }

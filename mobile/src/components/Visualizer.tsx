@@ -1,31 +1,48 @@
 import React, { useEffect, useRef } from "react";
-import { View, StyleSheet, Animated, Easing } from "react-native";
+import { View, StyleSheet, Animated, Easing, ViewStyle } from "react-native";
 import { colors } from "../theme/colors";
 
-const BAR_COUNT = 20;
+type Props = {
+  isPlaying: boolean;
+  color?: string;
+  barCount?: number;
+  height?: number;
+  style?: ViewStyle;
+};
 
-export default function Visualizer({ isPlaying }: { isPlaying: boolean }) {
+export default function Visualizer({
+  isPlaying,
+  color = colors.primary,
+  barCount = 24,
+  height = 42,
+  style,
+}: Props) {
   const bars = useRef(
-    Array.from({ length: BAR_COUNT }, () => new Animated.Value(0.1))
+    Array.from({ length: barCount }, () => new Animated.Value(0.12))
   ).current;
 
   useEffect(() => {
     const animations = bars.map((bar, i) => {
-      const duration = 350 + Math.random() * 350;
-      const delay = i * 30;
+      // Create organic wave patterns with varying frequency and heights
+      const centerFactor = 1 - Math.abs(i - barCount / 2) / (barCount / 2);
+      const maxHeight = 0.35 + Math.random() * 0.65 * (0.6 + centerFactor * 0.4);
+      const minHeight = 0.08 + Math.random() * 0.15;
+      const duration = 280 + Math.random() * 320;
+      const delay = (i % 6) * 45;
+
       return Animated.loop(
         Animated.sequence([
           Animated.timing(bar, {
-            toValue: 0.2 + Math.random() * 0.8,
+            toValue: maxHeight,
             duration,
             delay,
-            easing: Easing.inOut(Easing.sin),
+            easing: Easing.inOut(Easing.quad),
             useNativeDriver: true,
           }),
           Animated.timing(bar, {
-            toValue: 0.05 + Math.random() * 0.3,
-            duration,
-            easing: Easing.inOut(Easing.sin),
+            toValue: minHeight,
+            duration: duration * 1.1,
+            easing: Easing.inOut(Easing.quad),
             useNativeDriver: true,
           }),
         ])
@@ -33,25 +50,29 @@ export default function Visualizer({ isPlaying }: { isPlaying: boolean }) {
     });
 
     if (isPlaying) {
-      animations.forEach(a => a.start());
+      animations.forEach((a) => a.start());
     } else {
-      // Settle to a flat low line when paused
-      bars.forEach(bar =>
-        Animated.timing(bar, { toValue: 0.08, duration: 400, useNativeDriver: true }).start()
-      );
+      bars.forEach((bar) => {
+        Animated.timing(bar, {
+          toValue: 0.1,
+          duration: 350,
+          useNativeDriver: true,
+        }).start();
+      });
     }
 
-    return () => animations.forEach(a => a.stop());
-  }, [isPlaying]);
+    return () => animations.forEach((a) => a.stop());
+  }, [isPlaying, barCount]);
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { height }, style]}>
       {bars.map((bar, i) => (
         <Animated.View
           key={i}
           style={[
             styles.bar,
             {
+              backgroundColor: color,
               transform: [{ scaleY: bar }],
             },
           ]}
@@ -66,15 +87,13 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-end",
     justifyContent: "center",
-    height: 48,
     gap: 3,
     paddingHorizontal: 8,
   },
   bar: {
-    width: 3,
-    height: 40,
+    width: 3.2,
+    height: "100%",
     borderRadius: 2,
-    backgroundColor: colors.primary,
-    opacity: 0.85,
+    opacity: 0.9,
   },
 });

@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import { StyleSheet, Text, View } from "react-native";
+import React, { useEffect } from "react";
+import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import Animated, {
@@ -10,41 +10,32 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import * as Haptics from "expo-haptics";
-import { usePlayer } from "../context/PlayerContext";
+import { usePlaybackProgress, usePlayer } from "../context/PlayerContext";
 import { colors } from "../theme/colors";
 import AlbumArt from "./AlbumArt";
 import PressableScale from "./PressableScale";
-import { extractArtwork } from "../services/localLibrary";
+import Visualizer from "./Visualizer";
+import { getTrackTheme } from "../theme/dynamicTheme";
 
 export default function MiniPlayer() {
   const navigation = useNavigation<any>();
+  const { positionMillis, durationMillis } = usePlaybackProgress();
   const {
     currentTrack,
+    isLoading,
     isPlaying,
-    positionMillis,
-    durationMillis,
     togglePlayPause,
     isLiked,
     toggleLike,
   } = usePlayer();
   const iconScale = useSharedValue(1);
-  const [artworkUri, setArtworkUri] = useState<string | undefined>();
   const iconStyle = useAnimatedStyle(() => ({ transform: [{ scale: iconScale.value }] }));
+
+  const trackTheme = getTrackTheme(currentTrack);
 
   useEffect(() => {
     iconScale.value = withSequence(withTiming(0.78, { duration: 90 }), withSpring(1));
   }, [iconScale, isPlaying]);
-
-  useEffect(() => {
-    let active = true;
-    setArtworkUri(currentTrack?.thumbnail);
-    if (currentTrack && !currentTrack.thumbnail && currentTrack.source !== "youtube") {
-      void extractArtwork(currentTrack).then((uri) => {
-        if (active && uri) setArtworkUri(uri);
-      });
-    }
-    return () => { active = false; };
-  }, [currentTrack?.id, currentTrack?.thumbnail, currentTrack?.source]);
 
   if (!currentTrack) return null;
 
@@ -57,9 +48,9 @@ export default function MiniPlayer() {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { borderLeftColor: trackTheme.primary }]}>
       <View style={styles.progressTrack}>
-        <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+        <View style={[styles.progressFill, { width: `${progress * 100}%`, backgroundColor: trackTheme.primary }]} />
       </View>
       <View style={styles.row}>
         <PressableScale
@@ -68,12 +59,19 @@ export default function MiniPlayer() {
           style={styles.trackPress}
           onPress={() => navigation.navigate("NowPlaying")}
         >
-          <AlbumArt track={{ ...currentTrack, thumbnail: artworkUri }} size={44} radius={5} iconSize={20} />
+          <AlbumArt track={currentTrack} size={44} radius={6} />
           <View style={styles.trackInfo}>
-            <Text numberOfLines={1} style={styles.title}>{currentTrack.title}</Text>
-            <Text numberOfLines={1} style={styles.artist}>
-              {currentTrack.artist_name || "Unknown Artist"}
-            </Text>
+            <View style={styles.titleRow}>
+              <Text numberOfLines={1} style={styles.title}>{currentTrack.title}</Text>
+            </View>
+            <View style={styles.metaRow}>
+              {isPlaying && (
+                <Visualizer isPlaying={isPlaying} color={trackTheme.primary} barCount={4} height={10} style={styles.miniWave} />
+              )}
+              <Text numberOfLines={1} style={styles.artist}>
+                {currentTrack.artist_name || "Unknown Artist"}
+              </Text>
+            </View>
           </View>
         </PressableScale>
         <PressableScale
@@ -89,12 +87,12 @@ export default function MiniPlayer() {
           <Ionicons
             name={isLiked(currentTrack.id) ? "heart" : "heart-outline"}
             size={21}
-            color={isLiked(currentTrack.id) ? colors.primary : colors.textSecondary}
+            color={isLiked(currentTrack.id) ? trackTheme.primary : colors.textSecondary}
           />
         </PressableScale>
         <PressableScale
           accessibilityRole="button"
-          accessibilityLabel={isPlaying ? "Pause" : "Play"}
+          accessibilityLabel={isLoading ? "Loading track" : isPlaying ? "Pause" : "Play"}
           hitSlop={8}
           style={styles.playButton}
           onPress={() => {
@@ -102,9 +100,13 @@ export default function MiniPlayer() {
             void togglePlayPause();
           }}
         >
-          <Animated.View style={iconStyle}>
-            <Ionicons name={isPlaying ? "pause" : "play"} size={25} color={colors.text} />
-          </Animated.View>
+          {isLoading ? (
+            <ActivityIndicator size="small" color={colors.text} />
+          ) : (
+            <Animated.View style={iconStyle}>
+              <Ionicons name={isPlaying ? "pause" : "play"} size={25} color={colors.text} />
+            </Animated.View>
+          )}
         </PressableScale>
       </View>
     </View>
@@ -117,16 +119,20 @@ const styles = StyleSheet.create({
     marginHorizontal: 8,
     marginBottom: 4,
     overflow: "hidden",
-    borderRadius: 6,
+    borderRadius: 8,
     backgroundColor: colors.surfaceElevated,
+    borderLeftWidth: 3,
   },
-  progressTrack: { height: 2, backgroundColor: "rgba(255,255,255,0.18)" },
-  progressFill: { height: 2, backgroundColor: colors.primary },
+  progressTrack: { height: 2, backgroundColor: "rgba(255,255,255,0.14)" },
+  progressFill: { height: 2 },
   row: { flex: 1, flexDirection: "row", alignItems: "center", paddingLeft: 8, paddingRight: 4 },
   trackPress: { flex: 1, minWidth: 0, flexDirection: "row", alignItems: "center", height: "100%" },
   trackInfo: { flex: 1, minWidth: 0, marginLeft: 10, marginRight: 4 },
-  title: { color: colors.text, fontSize: 13, fontWeight: "600" },
-  artist: { color: colors.textSecondary, fontSize: 11, marginTop: 2 },
-  iconButton: { width: 42, height: 48, alignItems: "center", justifyContent: "center" },
+  titleRow: { flexDirection: "row", alignItems: "center" },
+  title: { color: colors.text, fontSize: 13, fontWeight: "700" },
+  metaRow: { flexDirection: "row", alignItems: "center", marginTop: 2 },
+  miniWave: { marginRight: 6, width: 14, height: 10, paddingHorizontal: 0 },
+  artist: { color: colors.textSecondary, fontSize: 11 },
+  iconButton: { width: 40, height: 48, alignItems: "center", justifyContent: "center" },
   playButton: { width: 42, height: 48, alignItems: "center", justifyContent: "center" },
 });

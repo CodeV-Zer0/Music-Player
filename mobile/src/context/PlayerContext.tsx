@@ -1,9 +1,10 @@
-import React, { createContext, useContext, useRef, useState, useCallback, useEffect } from "react";
-import { Audio, AVPlaybackStatus } from "expo-av";
+import React, { createContext, useContext, useRef, useState, useCallback, useEffect, useMemo } from "react";
+import { Alert } from "react-native";
+import { AudioPlayer, AudioStatus, createAudioPlayer, setAudioModeAsync } from "expo-audio";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as FileSystem from "expo-file-system/legacy";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
-import { LocalTrack } from "../services/localLibrary";
+import { extractArtwork, LocalTrack } from "../services/localLibrary";
 import { resolveStreamUrl } from "../services/pipedApi";
 
 // Extended Track type — works for both local and YouTube tracks
@@ -37,9 +38,8 @@ export const SETTINGS_AUDIO_KEY = "raga_settings_audio";
 
 type PlayerContextType = {
   currentTrack: Track | null;
+  isLoading: boolean;
   isPlaying: boolean;
-  positionMillis: number;
-  durationMillis: number;
   queue: Track[];
   // Liked songs
   likedTrackIds: string[];
@@ -57,9 +57,11 @@ type PlayerContextType = {
   // Downloads
   downloads: DownloadedTrack[];
   downloadTrack: (track: Track) => Promise<void>;
-  // Speed
+  // Speed & Volume
   playbackRate: number;
   setPlaybackRate: (rate: number) => Promise<void>;
+  volume: number;
+  setVolume: (volume: number) => Promise<void>;
   // Sleep Timer
   sleepTimerEnd: number | null;
   startSleepTimer: (minutes: number) => void;
@@ -73,13 +75,26 @@ type PlayerContextType = {
   showVisualizer: boolean;
   // Playback
   playTrack: (track: Track, queue?: Track[]) => Promise<void>;
+  playShuffled: (tracks: Track[]) => Promise<void>;
   togglePlayPause: () => Promise<void>;
   playNext: () => Promise<void>;
   playPrevious: () => Promise<void>;
+  moveQueueItem: (fromIndex: number, toIndex: number) => void;
   seekTo: (millis: number) => Promise<void>;
 };
 
 const PlayerContext = createContext<PlayerContextType | null>(null);
+const PlaybackProgressContext = createContext<{ positionMillis: number; durationMillis: number } | null>(null);
+const PlayerCollectionsContext = createContext<{
+  likedTrackIds: string[];
+  likedTracks: Track[];
+  isLiked: (id: string) => boolean;
+  toggleLike: (track: Track) => void;
+  playlists: Playlist[];
+  addTrackToPlaylist: (playlistId: string, track: Track) => void;
+  downloads: DownloadedTrack[];
+  downloadTrack: (track: Track) => Promise<void>;
+} | null>(null);
 
 function shuffleArray<T>(arr: T[]): T[] {
   const a = [...arr];
@@ -93,9 +108,16 @@ function shuffleArray<T>(arr: T[]): T[] {
   return a;
 }
 
+function getLockScreenArtworkUrl(uri?: string): string | undefined {
+  return uri && /^(https?:\/\/|file:\/\/)/i.test(uri) ? uri : undefined;
+}
+
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
-  const soundRef = useRef<Audio.Sound | null>(null);
+  const [audioPlayer] = useState<AudioPlayer>(() => createAudioPlayer(null, { updateInterval: 300 }));
+  const playRequestIdRef = useRef(0);
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
+  const currentTrackRef = useRef<Track | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [positionMillis, setPositionMillis] = useState(0);
   const [durationMillis, setDurationMillis] = useState(0);
@@ -106,16 +128,17 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [likedTrackIds, setLikedTrackIds] = useState<string[]>([]);
   const [likedTracks, setLikedTracks] = useState<Track[]>([]);
 
-  // Playlists
+  // Playlists & Downloads
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [downloads, setDownloads] = useState<DownloadedTrack[]>([]);
 
-  // Speed & Timer
+  // Speed, Volume, Sleep Timer
   const [playbackRate, setPlaybackRateState] = useState(1.0);
+  const [volume, setVolumeState] = useState(1.0);
   const [sleepTimerEnd, setSleepTimerEnd] = useState<number | null>(null);
   const sleepTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Recently played (newest first)
+  // Recently played
   const [recentlyPlayed, setRecentlyPlayed] = useState<Track[]>([]);
 
   // Shuffle & Repeat
@@ -126,6 +149,26 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [showVisualizer, setShowVisualizer] = useState(false);
   const [disableTimeout, setDisableTimeout] = useState(false);
   const [crossfadeEnabled, setCrossfadeEnabled] = useState(false);
+
+  // Refs for callbacks to avoid stale closures in AV playback status updates
+  const repeatModeRef = useRef(repeatMode);
+  useEffect(() => { repeatModeRef.current = repeatMode; }, [repeatMode]);
+
+  const queueRef = useRef(queue);
+  useEffect(() => { queueRef.current = queue; }, [queue]);
+
+  const queueIndexRef = useRef(queueIndex);
+  useEffect(() => { queueIndexRef.current = queueIndex; }, [queueIndex]);
+
+  // Configure the audio session once on startup.
+  useEffect(() => {
+    setAudioModeAsync({
+      playsInSilentMode: true,
+      interruptionMode: "duckOthers",
+      shouldPlayInBackground: true,
+      shouldRouteThroughEarpiece: false,
+    }).catch((error) => console.warn("Could not configure audio session", error));
+  }, []);
 
   // ── Load persisted data on mount ──────────────────────────────────────────
   useEffect(() => {
@@ -168,32 +211,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   // ── React to disableTimeout setting ──────────────────────────────────────
   useEffect(() => {
     if (disableTimeout) {
-      activateKeepAwakeAsync();
+      activateKeepAwakeAsync().catch(() => undefined);
     } else {
       deactivateKeepAwake();
     }
   }, [disableTimeout]);
-
-  // ── Re-read settings whenever app comes to foreground ────────────────────
-  // (settings can change from SettingDetailScreen without full restart)
-  const refreshSettings = useCallback(async () => {
-    try {
-      const [playerSettingsRaw, audioSettingsRaw] = await Promise.all([
-        AsyncStorage.getItem(SETTINGS_PLAYER_KEY),
-        AsyncStorage.getItem(SETTINGS_AUDIO_KEY),
-      ]);
-      if (playerSettingsRaw) {
-        const ps = JSON.parse(playerSettingsRaw);
-        setShowVisualizer(ps.showVis ?? false);
-        const dt = ps.disableTimeout ?? false;
-        setDisableTimeout(dt);
-      }
-      if (audioSettingsRaw) {
-        const as = JSON.parse(audioSettingsRaw);
-        setCrossfadeEnabled(as.crossfade ?? false);
-      }
-    } catch {}
-  }, []);
 
   // ── Liked songs helpers ───────────────────────────────────────────────────
   const isLiked = useCallback(
@@ -208,7 +230,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         const newIds = already ? prev.filter((id) => id !== track.id) : [...prev, track.id];
         setLikedTracks((pt) => {
           const newTracks = already ? pt.filter((t) => t.id !== track.id) : [...pt, track];
-          AsyncStorage.setItem(LIKED_KEY, JSON.stringify({ ids: newIds, tracks: newTracks }));
+          AsyncStorage.setItem(LIKED_KEY, JSON.stringify({ ids: newIds, tracks: newTracks })).catch(() => undefined);
           return newTracks;
         });
         return newIds;
@@ -222,282 +244,460 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setRecentlyPlayed((prev) => {
       const filtered = prev.filter((t) => t.id !== track.id);
       const updated = [track, ...filtered].slice(0, MAX_RECENT);
-      AsyncStorage.setItem(RECENT_KEY, JSON.stringify(updated));
+      AsyncStorage.setItem(RECENT_KEY, JSON.stringify(updated)).catch(() => undefined);
       return updated;
     });
   }, []);
 
+  // Forward declarations via refs
+  const playNextRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  const playPreviousRef = useRef<() => Promise<void>>(() => Promise.resolve());
+
+  useEffect(() => {
+    const subscription = audioPlayer.addListener("playbackStatusUpdate", (status: AudioStatus) => {
+      setIsLoading(!status.isLoaded && !status.didJustFinish);
+      setIsPlaying(status.playing);
+      setPositionMillis(status.currentTime * 1000);
+      setDurationMillis(status.duration * 1000);
+
+      if (status.didJustFinish && !status.loop) {
+        const mode = repeatModeRef.current;
+        if (mode === "all") {
+          void playNextRef.current();
+        } else {
+          const q = queueRef.current;
+          const idx = queueIndexRef.current;
+          if (idx < q.length - 1) {
+            void playNextRef.current();
+          } else {
+            setIsPlaying(false);
+          }
+        }
+      }
+    });
+    const nextSubscription = audioPlayer.addListener("lockScreenNextTrack", () => {
+      void playNextRef.current();
+    });
+    const previousSubscription = audioPlayer.addListener("lockScreenPreviousTrack", () => {
+      void playPreviousRef.current();
+    });
+
+    return () => {
+      subscription.remove();
+      nextSubscription.remove();
+      previousSubscription.remove();
+    };
+  }, [audioPlayer]);
+
+  // ── Play a track ──────────────────────────────────────────────────────────
+  const playTrack = useCallback(
+    async (track: Track, newQueue?: Track[]) => {
+      const requestId = ++playRequestIdRef.current;
+      const previousTrack = currentTrackRef.current;
+      currentTrackRef.current = track;
+      setCurrentTrack(track);
+      setIsLoading(true);
+      setIsPlaying(true);
+      setPositionMillis(0);
+      setDurationMillis(0);
+
+      // Manage queue
+      let activeQueue = queueRef.current;
+      if (newQueue && newQueue.length > 0) {
+        activeQueue = shuffleEnabled ? shuffleArray(newQueue) : newQueue;
+        queueRef.current = activeQueue;
+        setQueue(activeQueue);
+      }
+      const trackIndex = activeQueue.findIndex((t) => t.id === track.id);
+      const nextQueueIndex = trackIndex >= 0 ? trackIndex : 0;
+      queueIndexRef.current = nextQueueIndex;
+      setQueueIndex(nextQueueIndex);
+
+      try {
+        if (requestId !== playRequestIdRef.current) return;
+
+        let streamUrl: string;
+        if (track.source === "youtube") {
+          const downloaded = downloads.find((d) => d.id === track.id);
+          if (downloaded) {
+            streamUrl = downloaded.localUri;
+          } else {
+            streamUrl = await resolveStreamUrl(track.id);
+          }
+        } else {
+          streamUrl = track.uri;
+        }
+
+        if (requestId !== playRequestIdRef.current) return;
+
+        audioPlayer.replace(streamUrl);
+        audioPlayer.volume = volume;
+        audioPlayer.setPlaybackRate(playbackRate);
+        audioPlayer.shouldCorrectPitch = true;
+        audioPlayer.loop = repeatModeRef.current === "one";
+        audioPlayer.play();
+        try {
+          audioPlayer.setActiveForLockScreen(true, {
+            title: track.title,
+            artist: track.artist_name || "Unknown Artist",
+            albumTitle: track.album_title,
+            artworkUrl: getLockScreenArtworkUrl(track.thumbnail),
+          }, {
+            showNextTrack: true,
+            showPreviousTrack: true,
+          });
+        } catch (error) {
+          console.warn("Could not update lock-screen metadata", error);
+        }
+        addToRecent(track);
+        setIsPlaying(true);
+
+        if (!getLockScreenArtworkUrl(track.thumbnail) && track.source !== "youtube") {
+          void extractArtwork(track).then((artworkUrl) => {
+            if (artworkUrl && currentTrackRef.current?.id === track.id) {
+              try {
+                audioPlayer.updateLockScreenMetadata({
+                  title: track.title,
+                  artist: track.artist_name || "Unknown Artist",
+                  albumTitle: track.album_title,
+                  artworkUrl: getLockScreenArtworkUrl(artworkUrl),
+                });
+              } catch (error) {
+                console.warn("Could not update lock-screen artwork", error);
+              }
+            }
+          });
+        }
+      } catch (error) {
+        if (requestId !== playRequestIdRef.current) return;
+        currentTrackRef.current = previousTrack;
+        setCurrentTrack(previousTrack);
+        setIsLoading(false);
+        setIsPlaying(audioPlayer.playing);
+        console.warn("Playback failed", error);
+        const message = error instanceof Error ? error.message : "Please try another track.";
+        Alert.alert("Couldn't play this track", message);
+      }
+    },
+    [audioPlayer, downloads, playbackRate, volume, shuffleEnabled, addToRecent]
+  );
+
+  const playShuffled = useCallback(async (tracks: Track[]) => {
+    if (tracks.length === 0) return;
+    const shuffled = shuffleArray(tracks);
+    setShuffleEnabled(true);
+    await playTrack(shuffled[0]!, shuffled);
+  }, [playTrack]);
+
+  const togglePlayPause = useCallback(async () => {
+    if (!currentTrackRef.current) return;
+    if (!audioPlayer.isLoaded) {
+      if (currentTrack) {
+        await playTrack(currentTrack);
+      }
+      return;
+    }
+    if (audioPlayer.playing) {
+      audioPlayer.pause();
+      setIsPlaying(false);
+    } else {
+      audioPlayer.play();
+      setIsPlaying(true);
+    }
+  }, [audioPlayer, currentTrack, playTrack]);
+
+  const playNext = useCallback(async () => {
+    const q = queueRef.current;
+    if (q.length === 0) return;
+    let nextIndex = queueIndexRef.current + 1;
+    if (nextIndex >= q.length) {
+      if (repeatModeRef.current === "all") {
+        nextIndex = 0;
+      } else {
+        return;
+      }
+    }
+    const nextTrack = q[nextIndex];
+    if (nextTrack) {
+      await playTrack(nextTrack);
+    }
+  }, [playTrack]);
+
+  useEffect(() => {
+    playNextRef.current = playNext;
+  }, [playNext]);
+
+  const playPrevious = useCallback(async () => {
+    const q = queueRef.current;
+    if (q.length === 0) return;
+
+    // If more than 3 seconds in, seek to beginning
+    if (positionMillis > 3000 && audioPlayer.isLoaded) {
+      await audioPlayer.seekTo(0);
+      return;
+    }
+
+    const prevIndex = queueIndexRef.current - 1;
+    if (prevIndex >= 0) {
+      const prevTrack = q[prevIndex];
+      if (prevTrack) await playTrack(prevTrack);
+    } else {
+      await audioPlayer.seekTo(0);
+    }
+  }, [audioPlayer, positionMillis, playTrack]);
+
+  useEffect(() => {
+    playPreviousRef.current = playPrevious;
+  }, [playPrevious]);
+
+  const moveQueueItem = useCallback((fromIndex: number, toIndex: number) => {
+    const activeIndex = queueIndexRef.current;
+    const currentQueue = queueRef.current;
+    if (
+      fromIndex < 0 ||
+      fromIndex >= currentQueue.length ||
+      toIndex < 0 ||
+      toIndex >= currentQueue.length ||
+      fromIndex === activeIndex ||
+      toIndex === activeIndex
+    ) {
+      return;
+    }
+
+    const nextQueue = [...currentQueue];
+    const [movedTrack] = nextQueue.splice(fromIndex, 1);
+    if (!movedTrack) return;
+    nextQueue.splice(toIndex, 0, movedTrack);
+
+    const nextActiveIndex = fromIndex < activeIndex && toIndex >= activeIndex
+      ? activeIndex - 1
+      : fromIndex > activeIndex && toIndex <= activeIndex
+        ? activeIndex + 1
+        : activeIndex;
+    queueRef.current = nextQueue;
+    queueIndexRef.current = nextActiveIndex;
+    setQueue(nextQueue);
+    setQueueIndex(nextActiveIndex);
+  }, []);
+
+  const seekTo = useCallback(async (millis: number) => {
+    await audioPlayer.seekTo(Math.max(0, millis) / 1000);
+  }, [audioPlayer]);
+
+  // ── Rate & Volume ─────────────────────────────────────────────────────────
+  const setPlaybackRate = useCallback(async (rate: number) => {
+    setPlaybackRateState(rate);
+    audioPlayer.setPlaybackRate(rate);
+  }, [audioPlayer]);
+
+  const setVolume = useCallback(async (vol: number) => {
+    setVolumeState(vol);
+    audioPlayer.volume = vol;
+  }, [audioPlayer]);
+
+  // ── Shuffle & Repeat ──────────────────────────────────────────────────────
+  const toggleShuffle = useCallback(() => {
+    setShuffleEnabled((prev) => {
+      const next = !prev;
+      if (next && queue.length > 1 && currentTrack) {
+        const remaining = queue.filter((t) => t.id !== currentTrack.id);
+        const shuffled = [currentTrack, ...shuffleArray(remaining)];
+        setQueue(shuffled);
+        setQueueIndex(0);
+      }
+      return next;
+    });
+  }, [queue, currentTrack]);
+
+  const cycleRepeat = useCallback(() => {
+    setRepeatMode((prev) => {
+      const next: RepeatMode = prev === "off" ? "all" : prev === "all" ? "one" : "off";
+      audioPlayer.loop = next === "one";
+      return next;
+    });
+  }, [audioPlayer]);
+
+  // ── Sleep Timer ───────────────────────────────────────────────────────────
+  const cancelSleepTimer = useCallback(() => {
+    if (sleepTimerRef.current) {
+      clearTimeout(sleepTimerRef.current);
+      sleepTimerRef.current = null;
+    }
+    setSleepTimerEnd(null);
+  }, []);
+
+  const startSleepTimer = useCallback(
+    (minutes: number) => {
+      cancelSleepTimer();
+      const endTime = Date.now() + minutes * 60 * 1000;
+      setSleepTimerEnd(endTime);
+      sleepTimerRef.current = setTimeout(async () => {
+        audioPlayer.pause();
+        setIsPlaying(false);
+        setSleepTimerEnd(null);
+      }, minutes * 60 * 1000);
+    },
+    [audioPlayer, cancelSleepTimer]
+  );
+
   // ── Playlists ─────────────────────────────────────────────────────────────
   const createPlaylist = useCallback((name: string) => {
+    const newPlaylist: Playlist = { id: `playlist_${Date.now()}`, name, tracks: [] };
     setPlaylists((prev) => {
-      const newPlaylist: Playlist = { id: Date.now().toString(), name, tracks: [] };
       const updated = [...prev, newPlaylist];
-      AsyncStorage.setItem(PLAYLISTS_KEY, JSON.stringify(updated));
+      AsyncStorage.setItem(PLAYLISTS_KEY, JSON.stringify(updated)).catch(() => undefined);
       return updated;
     });
   }, []);
 
   const deletePlaylist = useCallback((id: string) => {
     setPlaylists((prev) => {
-      const updated = prev.filter(p => p.id !== id);
-      AsyncStorage.setItem(PLAYLISTS_KEY, JSON.stringify(updated));
+      const updated = prev.filter((p) => p.id !== id);
+      AsyncStorage.setItem(PLAYLISTS_KEY, JSON.stringify(updated)).catch(() => undefined);
       return updated;
     });
   }, []);
 
   const addTrackToPlaylist = useCallback((playlistId: string, track: Track) => {
     setPlaylists((prev) => {
-      const updated = prev.map(p => {
-        if (p.id === playlistId) {
-          if (p.tracks.find(t => t.id === track.id)) return p;
-          return { ...p, tracks: [...p.tracks, track] };
-        }
-        return p;
+      const updated = prev.map((p) => {
+        if (p.id !== playlistId) return p;
+        if (p.tracks.some((t) => t.id === track.id)) return p;
+        return { ...p, tracks: [...p.tracks, track] };
       });
-      AsyncStorage.setItem(PLAYLISTS_KEY, JSON.stringify(updated));
+      AsyncStorage.setItem(PLAYLISTS_KEY, JSON.stringify(updated)).catch(() => undefined);
       return updated;
     });
   }, []);
 
   const removeTrackFromPlaylist = useCallback((playlistId: string, trackId: string) => {
     setPlaylists((prev) => {
-      const updated = prev.map(p => {
-        if (p.id === playlistId) {
-          return { ...p, tracks: p.tracks.filter(t => t.id !== trackId) };
-        }
-        return p;
+      const updated = prev.map((p) => {
+        if (p.id !== playlistId) return p;
+        return { ...p, tracks: p.tracks.filter((t) => t.id !== trackId) };
       });
-      AsyncStorage.setItem(PLAYLISTS_KEY, JSON.stringify(updated));
+      AsyncStorage.setItem(PLAYLISTS_KEY, JSON.stringify(updated)).catch(() => undefined);
       return updated;
     });
   }, []);
 
   // ── Downloads ─────────────────────────────────────────────────────────────
   const downloadTrack = useCallback(async (track: Track) => {
-    if (track.source === 'local') return;
+    if (downloads.some((d) => d.id === track.id)) return;
     try {
-      const fileUri = FileSystem.documentDirectory + `${track.id}.m4a`;
-      const streamUrl = track.uri || await resolveStreamUrl(track.id);
-      await FileSystem.downloadAsync(streamUrl, fileUri);
-      const newDl: DownloadedTrack = { ...track, localUri: fileUri };
+      const streamUrl = await resolveStreamUrl(track.id);
+      const filename = `track_${track.id}.mp4`;
+      const localUri = `${FileSystem.documentDirectory}${filename}`;
+      const downloadRes = await FileSystem.downloadAsync(streamUrl, localUri);
+      const downloadedTrack: DownloadedTrack = {
+        ...track,
+        localUri: downloadRes.uri,
+      };
       setDownloads((prev) => {
-        const next = [...prev, newDl];
-        AsyncStorage.setItem(DOWNLOADS_KEY, JSON.stringify(next));
-        return next;
+        const updated = [...prev, downloadedTrack];
+        AsyncStorage.setItem(DOWNLOADS_KEY, JSON.stringify(updated)).catch(() => undefined);
+        return updated;
       });
     } catch (e) {
       console.warn("Download failed", e);
     }
-  }, []);
+  }, [downloads]);
 
-  // ── Speed & Timer ─────────────────────────────────────────────────────────
-  const setPlaybackRate = useCallback(async (rate: number) => {
-    setPlaybackRateState(rate);
-    if (soundRef.current) {
-      await soundRef.current.setRateAsync(rate, true);
-    }
-  }, []);
+  // Clean up the native audio player on unmount.
+  useEffect(() => {
+    return () => {
+      audioPlayer.clearLockScreenControls();
+      audioPlayer.remove();
+    };
+  }, [audioPlayer]);
 
-  const cancelSleepTimer = useCallback(() => {
-    if (sleepTimerRef.current) clearTimeout(sleepTimerRef.current);
-    sleepTimerRef.current = null;
-    setSleepTimerEnd(null);
-  }, []);
+  const collectionsValue = useMemo(() => ({
+    likedTrackIds,
+    likedTracks,
+    isLiked,
+    toggleLike,
+    playlists,
+    addTrackToPlaylist,
+    downloads,
+    downloadTrack,
+  }), [
+    likedTrackIds, likedTracks, isLiked, toggleLike, playlists,
+    addTrackToPlaylist, downloads, downloadTrack,
+  ]);
 
-  const startSleepTimer = useCallback((minutes: number) => {
-    cancelSleepTimer();
-    const ms = minutes * 60 * 1000;
-    setSleepTimerEnd(Date.now() + ms);
-    sleepTimerRef.current = setTimeout(async () => {
-      if (soundRef.current) {
-        await soundRef.current.pauseAsync();
-      }
-      setSleepTimerEnd(null);
-    }, ms);
-  }, [cancelSleepTimer]);
+  const playerValue = useMemo<PlayerContextType>(() => ({
+    currentTrack,
+    isLoading,
+    isPlaying,
+    queue,
+    likedTrackIds,
+    likedTracks,
+    isLiked,
+    toggleLike,
+    recentlyPlayed,
+    playlists,
+    createPlaylist,
+    deletePlaylist,
+    addTrackToPlaylist,
+    removeTrackFromPlaylist,
+    downloads,
+    downloadTrack,
+    playbackRate,
+    setPlaybackRate,
+    volume,
+    setVolume,
+    sleepTimerEnd,
+    startSleepTimer,
+    cancelSleepTimer,
+    shuffleEnabled,
+    toggleShuffle,
+    repeatMode,
+    cycleRepeat,
+    showVisualizer,
+    playTrack,
+    playShuffled,
+    togglePlayPause,
+    playNext,
+    playPrevious,
+    moveQueueItem,
+    seekTo,
+  }), [
+    currentTrack, isLoading, isPlaying, queue, likedTrackIds, likedTracks,
+    isLiked, toggleLike, recentlyPlayed, playlists, createPlaylist,
+    deletePlaylist, addTrackToPlaylist, removeTrackFromPlaylist, downloads,
+    downloadTrack, playbackRate, setPlaybackRate, volume, setVolume,
+    sleepTimerEnd, startSleepTimer, cancelSleepTimer, shuffleEnabled,
+    toggleShuffle, repeatMode, cycleRepeat, showVisualizer, playTrack,
+    playShuffled, togglePlayPause, playNext, playPrevious, moveQueueItem, seekTo,
+  ]);
 
-  // ── Shuffle & Repeat ──────────────────────────────────────────────────────
-  const toggleShuffle = useCallback(() => {
-    setShuffleEnabled(prev => {
-      const next = !prev;
-      if (next) {
-        // Shuffle queue, keep current track at front
-        setQueue(q => {
-          if (q.length === 0) return q;
-          const currentIndex = q.findIndex(t => t.id === currentTrack?.id);
-          const current = currentIndex >= 0 ? q[currentIndex] : null;
-          const rest = q.filter((_, i) => i !== currentIndex);
-          const shuffled = shuffleArray(rest);
-          const newQ = current ? [current, ...shuffled] : shuffled;
-          setQueueIndex(0);
-          return newQ;
-        });
-      }
-      return next;
-    });
-  }, [currentTrack]);
-
-  const cycleRepeat = useCallback(() => {
-    setRepeatMode(prev => {
-      if (prev === "off") return "all";
-      if (prev === "all") return "one";
-      return "off";
-    });
-  }, []);
-
-  // ── Playback ──────────────────────────────────────────────────────────────
-  // Use refs so closures inside onStatusUpdate always see latest values
-  const repeatModeRef = useRef<RepeatMode>("off");
-  useEffect(() => { repeatModeRef.current = repeatMode; }, [repeatMode]);
-
-  const playNextRef = useRef<(() => void) | null>(null);
-  const seekToRef = useRef<((m: number) => Promise<void>) | null>(null);
-
-  const onStatusUpdate = useCallback((status: AVPlaybackStatus) => {
-    if (!status.isLoaded) return;
-    setPositionMillis(status.positionMillis || 0);
-    setDurationMillis(status.durationMillis || 0);
-    setIsPlaying(status.isPlaying);
-    if (status.didJustFinish) {
-      const mode = repeatModeRef.current;
-      if (mode === "one") {
-        // Seek back to start and replay
-        seekToRef.current?.(0);
-        soundRef.current?.playAsync();
-      } else {
-        playNextRef.current?.();
-      }
-    }
-  }, []);
-
-  const playTrack = useCallback(
-    async (track: Track, newQueue?: Track[]) => {
-      await refreshSettings();
-      await Audio.setAudioModeAsync({
-        staysActiveInBackground: true,
-        playsInSilentModeIOS: true,
-      });
-
-      if (soundRef.current) {
-        await soundRef.current.unloadAsync();
-        soundRef.current = null;
-      }
-
-      // Check if downloaded
-      const downloaded = downloads.find(d => d.id === track.id);
-      const uriToPlay = downloaded ? downloaded.localUri : track.uri;
-
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: uriToPlay },
-        { shouldPlay: true, rate: playbackRate, shouldCorrectPitch: true },
-        onStatusUpdate
-      );
-      soundRef.current = sound;
-      setCurrentTrack(track);
-      addToRecent(track);
-
-      if (newQueue) {
-        const q = shuffleEnabled ? (() => {
-          const idx = newQueue.findIndex(t => t.id === track.id);
-          const current = idx >= 0 ? newQueue[idx] : null;
-          const rest = newQueue.filter((_, i) => i !== idx);
-          const shuffled = shuffleArray(rest);
-          return current ? [current, ...shuffled] : shuffled;
-        })() : newQueue;
-        setQueue(q);
-        setQueueIndex(q.findIndex((t) => t.id === track.id));
-      }
-    },
-    [onStatusUpdate, addToRecent, playbackRate, downloads, shuffleEnabled, refreshSettings]
-  );
-
-  const togglePlayPause = useCallback(async () => {
-    if (!soundRef.current) return;
-    if (isPlaying) {
-      await soundRef.current.pauseAsync();
-    } else {
-      await soundRef.current.playAsync();
-    }
-  }, [isPlaying]);
-
-  const playNext = useCallback(async () => {
-    if (queue.length === 0) return;
-    let nextIndex = queueIndex + 1;
-    if (nextIndex >= queue.length) {
-      if (repeatMode === "all") nextIndex = 0;
-      else return;
-    }
-    setQueueIndex(nextIndex);
-    const nextTrack = queue[nextIndex];
-    if (!nextTrack) return;
-    await playTrack(nextTrack);
-  }, [queue, queueIndex, playTrack, repeatMode]);
-
-  // Keep refs in sync
-  useEffect(() => { playNextRef.current = playNext; }, [playNext]);
-
-  const seekTo = useCallback(async (millis: number) => {
-    if (!soundRef.current) return;
-    await soundRef.current.setPositionAsync(millis);
-  }, []);
-
-  useEffect(() => { seekToRef.current = seekTo; }, [seekTo]);
-
-  const playPrevious = useCallback(async () => {
-    if (queue.length === 0) return;
-    const prevIndex = queueIndex - 1;
-    if (prevIndex >= 0) {
-      setQueueIndex(prevIndex);
-      const previousTrack = queue[prevIndex];
-      if (!previousTrack) return;
-      await playTrack(previousTrack);
-    }
-  }, [queue, queueIndex, playTrack]);
+  const progressValue = useMemo(() => ({ positionMillis, durationMillis }), [positionMillis, durationMillis]);
 
   return (
-    <PlayerContext.Provider
-      value={{
-        currentTrack,
-        isPlaying,
-        positionMillis,
-        durationMillis,
-        queue,
-        likedTrackIds,
-        likedTracks,
-        isLiked,
-        toggleLike,
-        recentlyPlayed,
-        playlists,
-        createPlaylist,
-        deletePlaylist,
-        addTrackToPlaylist,
-        removeTrackFromPlaylist,
-        downloads,
-        downloadTrack,
-        playbackRate,
-        setPlaybackRate,
-        sleepTimerEnd,
-        startSleepTimer,
-        cancelSleepTimer,
-        shuffleEnabled,
-        toggleShuffle,
-        repeatMode,
-        cycleRepeat,
-        showVisualizer,
-        playTrack,
-        togglePlayPause,
-        playNext,
-        playPrevious,
-        seekTo,
-      }}
-    >
-      {children}
-    </PlayerContext.Provider>
+    <PlayerCollectionsContext.Provider value={collectionsValue}>
+      <PlayerContext.Provider value={playerValue}>
+        <PlaybackProgressContext.Provider value={progressValue}>
+          {children}
+        </PlaybackProgressContext.Provider>
+      </PlayerContext.Provider>
+    </PlayerCollectionsContext.Provider>
   );
 }
 
 export function usePlayer() {
   const ctx = useContext(PlayerContext);
   if (!ctx) throw new Error("usePlayer must be used within PlayerProvider");
+  return ctx;
+}
+
+export function usePlaybackProgress() {
+  const ctx = useContext(PlaybackProgressContext);
+  if (!ctx) throw new Error("usePlaybackProgress must be used within PlayerProvider");
+  return ctx;
+}
+
+export function usePlayerCollections() {
+  const ctx = useContext(PlayerCollectionsContext);
+  if (!ctx) throw new Error("usePlayerCollections must be used within PlayerProvider");
   return ctx;
 }

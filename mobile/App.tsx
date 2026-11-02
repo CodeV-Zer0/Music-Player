@@ -7,6 +7,9 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { StatusBar } from "expo-status-bar";
 import { colors } from "./src/theme/colors";
 import { PlayerProvider } from "./src/context/PlayerContext";
+import { LibraryProvider } from "./src/context/LibraryContext";
+import { TrackActionsProvider } from "./src/components/TrackActionsSheet";
+import ErrorBoundary from "./src/components/ErrorBoundary";
 import MainTabs from "./src/navigation/MainTabs";
 import ArtistScreen from "./src/screens/ArtistScreen";
 import NowPlayingScreen from "./src/screens/NowPlayingScreen";
@@ -30,30 +33,36 @@ export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
-        <PlayerProvider>
-          <StatusBar style="light" />
-          <NavigationContainer theme={navTheme}>
-            <Stack.Navigator 
-              screenOptions={{ 
-                headerShown: false, 
-                animation: "slide_from_right", 
-                animationDuration: 250 
-              }}
-            >
-              <Stack.Screen name="MainTabs" component={MainTabs} />
-              <Stack.Screen name="Artist" component={ArtistScreen} options={{ headerShown: true, title: "" }} />
-              <Stack.Screen name="NowPlaying" component={NowPlayingScreen} options={{ presentation: "modal", animation: "slide_from_bottom" }} />
-              <Stack.Screen name="LikedSongs" component={LikedSongsScreen} />
-              <Stack.Screen name="Settings" component={SettingsScreen} />
-              <Stack.Screen name="SettingDetail" component={SettingDetailScreen} />
-              <Stack.Screen name="RecentlyPlayed" component={RecentlyPlayedScreen} />
-              <Stack.Screen name="Playlists" component={PlaylistsScreen} />
-              <Stack.Screen name="PlaylistDetails" component={PlaylistDetailsScreen} />
-              <Stack.Screen name="Downloads" component={DownloadsScreen} />
-              <Stack.Screen name="Lyrics" component={LyricsScreen} options={{ presentation: 'modal' }} />
-            </Stack.Navigator>
-          </NavigationContainer>
-        </PlayerProvider>
+        <ErrorBoundary>
+          <PlayerProvider>
+            <LibraryProvider>
+              <StatusBar style="light" />
+              <NavigationContainer theme={navTheme}>
+                <TrackActionsProvider>
+                  <Stack.Navigator
+                    screenOptions={{
+                      headerShown: false,
+                      animation: "slide_from_right",
+                      animationDuration: 250,
+                    }}
+                  >
+                    <Stack.Screen name="MainTabs" component={MainTabs} />
+                    <Stack.Screen name="Artist" component={ArtistScreen} options={{ headerShown: true, title: "" }} />
+                    <Stack.Screen name="NowPlaying" component={NowPlayingScreen} options={{ presentation: "modal", animation: "slide_from_bottom" }} />
+                    <Stack.Screen name="LikedSongs" component={LikedSongsScreen} />
+                    <Stack.Screen name="Settings" component={SettingsScreen} />
+                    <Stack.Screen name="SettingDetail" component={SettingDetailScreen} />
+                    <Stack.Screen name="RecentlyPlayed" component={RecentlyPlayedScreen} />
+                    <Stack.Screen name="Playlists" component={PlaylistsScreen} />
+                    <Stack.Screen name="PlaylistDetails" component={PlaylistDetailsScreen} />
+                    <Stack.Screen name="Downloads" component={DownloadsScreen} />
+                    <Stack.Screen name="Lyrics" component={LyricsScreen} options={{ presentation: "modal" }} />
+                  </Stack.Navigator>
+                </TrackActionsProvider>
+              </NavigationContainer>
+            </LibraryProvider>
+          </PlayerProvider>
+        </ErrorBoundary>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

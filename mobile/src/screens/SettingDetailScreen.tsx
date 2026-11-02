@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from "react";
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Switch, Alert, ToastAndroid, Platform } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRoute, useNavigation, useFocusEffect } from "@react-navigation/native";
+import { useRoute, useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { colors, spacing } from "../theme/colors";
+import { useLibrary } from "../context/LibraryContext";
 import { SETTINGS_PLAYER_KEY, SETTINGS_AUDIO_KEY } from "../context/PlayerContext";
 
 export default function SettingDetailScreen() {
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
   const { category, title } = route.params;
+  const { accessMode, status: libraryStatus, refreshing, requestFullAccess, selectMusicFolder } = useLibrary();
 
   const [settings, setSettings] = useState<Record<string, boolean>>({});
 
@@ -88,6 +90,47 @@ export default function SettingDetailScreen() {
       case "advanced":
         return (
           <>
+            <View style={styles.accessStatus}>
+              <Text style={styles.toggleLabel}>Music library access</Text>
+              <Text style={styles.toggleSub}>
+                Current: {accessMode === "full"
+                  ? "Full library"
+                  : accessMode === "folder"
+                    ? "Selected folder"
+                    : "Not configured"}
+              </Text>
+              {libraryStatus === "denied" || libraryStatus === "error" ? (
+                <Text style={styles.accessWarning}>
+                  {libraryStatus === "denied"
+                    ? "Music access was not granted. Choose an access option below."
+                    : "Could not update music access. Please try again."}
+                </Text>
+              ) : null}
+            </View>
+            <TouchableOpacity
+              style={[
+                styles.actionBtn,
+                styles.accessBtn,
+                (refreshing || libraryStatus === "loading") && styles.disabledBtn,
+              ]}
+              disabled={refreshing || libraryStatus === "loading"}
+              onPress={() => void requestFullAccess()}
+            >
+              <Text style={styles.accessBtnText}>Grant full music access</Text>
+              <Text style={styles.accessBtnSub}>Scan audio files across your device</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.actionBtn,
+                styles.accessBtn,
+                (refreshing || libraryStatus === "loading") && styles.disabledBtn,
+              ]}
+              disabled={refreshing || libraryStatus === "loading"}
+              onPress={() => void selectMusicFolder()}
+            >
+              <Text style={styles.accessBtnText}>Choose or change music folder</Text>
+              <Text style={styles.accessBtnSub}>Limit access to a folder you select</Text>
+            </TouchableOpacity>
             <TouchableOpacity style={styles.actionBtn} onPress={async () => {
               await AsyncStorage.clear();
               if (Platform.OS === 'android') ToastAndroid.show("App data reset. Please restart the app.", ToastAndroid.LONG);
@@ -158,4 +201,14 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
   },
   actionBtnText: { color: colors.danger, fontSize: 16, fontWeight: "600" },
+  accessStatus: {
+    paddingVertical: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSoft,
+  },
+  accessWarning: { color: colors.danger, fontSize: 13, marginTop: spacing.xs },
+  accessBtn: { alignItems: "flex-start" },
+  accessBtnText: { color: colors.text, fontSize: 16, fontWeight: "600" },
+  accessBtnSub: { color: colors.textSecondary, fontSize: 13, marginTop: spacing.xs },
+  disabledBtn: { opacity: 0.5 },
 });

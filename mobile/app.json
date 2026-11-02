@@ -7,7 +7,7 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "splash": {
-      "backgroundColor": "#121212"
+      "backgroundColor": "#000000"
     },
     "ios": {
       "supportsTablet": true,
@@ -20,19 +20,19 @@
     },
     "android": {
       "package": "com.yourname.mymusic",
-      "permissions": [
-        "READ_MEDIA_AUDIO",
-        "READ_EXTERNAL_STORAGE",
-        "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE",
-        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+      "blockedPermissions": [
         "android.permission.READ_MEDIA_IMAGES",
         "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.ACCESS_MEDIA_LOCATION",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "permissions": [
         "android.permission.READ_MEDIA_AUDIO"
       ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#121212"
+        "backgroundColor": "#000000"
       }
     },
     "plugins": [
@@ -41,7 +41,17 @@
         {
           "photosPermission": false,
           "savePhotosPermission": false,
-          "isAccessMediaLocationEnabled": false
+          "isAccessMediaLocationEnabled": false,
+          "granularPermissions": [
+            "audio"
+          ]
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": false,
+          "recordAudioAndroid": false
         }
       ],
       "expo-font"

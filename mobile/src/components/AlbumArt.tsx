@@ -1,9 +1,8 @@
-import React from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Image, StyleSheet, View, ViewStyle } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
-import { colors } from "../theme/colors";
 import { Track } from "../context/PlayerContext";
+import { extractArtwork, getSystemArtworkUri, peekArtwork } from "../services/localLibrary";
 
 type Props = {
   track?: Track | null;
@@ -13,35 +12,67 @@ type Props = {
   style?: ViewStyle;
 };
 
-export default function AlbumArt({ track, size, radius = 8, iconSize = 24, style }: Props) {
+function AlbumArt({ track, size, radius = 8, iconSize, style }: Props) {
+  const fallbackUri = useMemo(() => {
+    if (!track) return undefined;
+    return track.thumbnail || peekArtwork(track.id) || getSystemArtworkUri(track);
+  }, [track]);
+  const [artwork, setArtwork] = useState<string | undefined>(fallbackUri);
+  const [failedUri, setFailedUri] = useState<string>();
+
+  useEffect(() => {
+    setArtwork(fallbackUri);
+    setFailedUri(undefined);
+    if (!track || track.source === "youtube" || fallbackUri?.startsWith("http")) return;
+
+    let active = true;
+    if (!fallbackUri) {
+      void extractArtwork(track).then((uri) => {
+        if (active && uri) setArtwork(uri);
+      });
+    }
+    return () => {
+      active = false;
+    };
+  }, [track, fallbackUri]);
+
+  const shown = artwork && artwork !== failedUri ? artwork : undefined;
+
   return (
     <View style={[styles.wrap, { width: size, height: size, borderRadius: radius }, style]}>
-      {track?.thumbnail ? (
-        <Image source={{ uri: track.thumbnail }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
-      ) : (
-        <LinearGradient
-          colors={[colors.surfaceElevated, colors.surface]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
+      {shown ? (
+        <Image
+          source={{ uri: shown }}
           style={StyleSheet.absoluteFillObject}
+          resizeMode="cover"
+          onError={() => {
+            setFailedUri(shown);
+            if (track && track.source !== "youtube") {
+              void extractArtwork(track).then((uri) => {
+                if (uri) setArtwork(uri);
+              });
+            }
+          }}
         />
-      )}
-      {!track?.thumbnail && (
-        <Ionicons
-          name={track?.source === "youtube" ? "logo-youtube" : "musical-note"}
-          size={iconSize}
-          color={track?.source === "youtube" ? colors.danger : colors.textSecondary}
-        />
-      )}
+      ) : track ? (
+        <Ionicons name="musical-note" size={iconSize ?? Math.max(16, Math.round(size * 0.34))} color="#454545" />
+      ) : null}
     </View>
   );
 }
+
+export default React.memo(AlbumArt, (prev, next) => (
+  prev.size === next.size &&
+  prev.radius === next.radius &&
+  prev.track?.id === next.track?.id &&
+  prev.track?.thumbnail === next.track?.thumbnail
+));
 
 const styles = StyleSheet.create({
   wrap: {
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
-    backgroundColor: colors.surfaceElevated,
+    backgroundColor: "#090909",
   },
 });
